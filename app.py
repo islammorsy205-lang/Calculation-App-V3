@@ -101,7 +101,6 @@ def_live_load = 1.50 if "BS" in ref_code else 2.40
 st.divider()
 st.subheader("2. Structural System Configurator")
 
-# 💡 تمت إضافة خيار الكباري للقائمة
 sys_cat = st.radio("Select Structural Category:", ["Slab Elements", "Vertical Elements (Walls, Columns)", "Inclined Elements (Frames)", "Slab Back-propping", "Bridges"], horizontal=True)
 
 if "Inclined Elements" in sys_cat:
@@ -114,7 +113,6 @@ if "Back-propping" in sys_cat:
     backprop_master.render_backprop_module(ref_code)
     st.stop()
 
-# 💡 تمرير بيانات المشروع لملف الكباري لتوليد النوتة بشكل متطابق مع باقي البرنامج
 if "Bridges" in sys_cat:
     import bridge_master
     proj_info = {
