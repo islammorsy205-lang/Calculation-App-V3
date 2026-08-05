@@ -114,10 +114,16 @@ if "Back-propping" in sys_cat:
     backprop_master.render_backprop_module(ref_code)
     st.stop()
 
-# 💡 استدعاء ملف الكباري
+# 💡 تمرير بيانات المشروع لملف الكباري لتوليد النوتة بشكل متطابق مع باقي البرنامج
 if "Bridges" in sys_cat:
     import bridge_master
-    bridge_master.render_bridge_module()
+    proj_info = {
+        "proj_name": proj_name, "contractor": contractor, "calc_sub": calc_sub,
+        "sys_name": sys_name, "proj_no": proj_no, "calc_by": calc_by,
+        "date_val": date_val, "chk_by": chk_by, "ref_code": ref_code,
+        "cover_img": cover_img, "data_sheets": data_sheets
+    }
+    bridge_master.render_bridge_module(proj_info)
     st.stop()
 
 configs = []
@@ -281,6 +287,9 @@ if generate_doc_btn:
             sys_name_clean = sys_name.replace("/", "-").replace("\\", "-")
             file_name = f"Calculation Sheet for {file_sub_cat} - Using {sys_name_clean}.docx"
 
+            # ==========================================
+            # Smart Find & Replace logic for Cover Page
+            # ==========================================
             def remove_hardcoded_prefix(p):
                 if p.text and "CALCULATION SHEET FOR" in p.text.upper():
                     for r in p.runs:
@@ -316,6 +325,7 @@ if generate_doc_btn:
                         for p in cell.paragraphs:
                             remove_hardcoded_prefix(p)
 
+            # 2. INJECT NEW VARIABLES
             replacements = {
                 "[PROJECT_NAME]": proj_name,
                 "[CONTRACTOR]": contractor,
@@ -352,6 +362,7 @@ if generate_doc_btn:
                                         
             doc.add_page_break()
             
+            # --- Headers and Footers ---
             for sec in doc.sections:
                 for hf in [sec.header, sec.first_page_header, sec.footer, sec.first_page_footer]:
                     if hf:
@@ -369,6 +380,7 @@ if generate_doc_btn:
                                                 for r in p.runs: 
                                                     r.font._element.set(qn('w:ascii'), 'Arial')
             
+            # --- Regulations ---
             insert_blue_banner(doc, "REGULATIONS AND STANDARDS", font_size=16)
             doc.add_paragraph()
             
@@ -384,6 +396,7 @@ if generate_doc_btn:
                 add_eq(doc, "3- WISA®-FORM PLYWOOD.")
                 add_eq(doc, "4- THE SAUDI BUILDING CODE (SBC) 2018")
             
+            # --- Data Sheets ---
             if data_sheets:
                 doc.add_page_break()
                 insert_blue_banner(doc, "FORMWORK MATERIALS TECHNICAL DATA", font_size=14)
@@ -391,6 +404,7 @@ if generate_doc_btn:
                     if os.path.exists(f): 
                         append_pdf_stream_to_word(f, doc, is_path=True, max_width_cm=17.5, max_height_cm=24.0, add_border=True, reduce_first_page=True)
             
+            # --- Slab Design Loads ---
             if "Slab Elements" in sys_cat:
                 design_pdf = "Design_Loads_BS.pdf" if "BS" in ref_code and os.path.exists("Design_Loads_BS.pdf") else ("Design_Loads_ACI.pdf" if "ACI" in ref_code and os.path.exists("Design_Loads_ACI.pdf") else None)
                 if design_pdf: 
@@ -401,6 +415,9 @@ if generate_doc_btn:
                 doc.add_page_break()
                 insert_blue_banner(doc, "FORMWORK SKETCHES", font_size=16)
 
+            # ==========================================
+            # Word Generation per Config
+            # ==========================================
             for idx, conf in enumerate(configs):
                 if conf['cat'] == 'vertical':
                     if conf.get("wall_pdf_curr"):
@@ -414,6 +431,7 @@ if generate_doc_btn:
 
                 doc.add_page_break()
                 
+                # --- Panel Systems ---
                 if conf.get('is_panel_system'):
                     insert_blue_banner(doc, f"CHECK FORMWORK ELEMENTS FOR {conf['sub_cat'].upper()} HEIGHT {conf.get('height', 0):.2f} m", font_size=14)
                     add_eq(doc, f"{conf['sub_cat']} Load = Concrete Pressure", italic=True)
@@ -444,6 +462,7 @@ if generate_doc_btn:
                         add_word_check(doc, "Check for Bolt Safety", bolt_f, 50.00, "KN")
                         chk_counter += 1
                     
+                # --- Non-Panel Systems OR Single Sided Wall ---
                 else:
                     if conf['cat'] == 'horizontal':
                         if conf['sub_cat'] == 'Beam': 
@@ -461,6 +480,7 @@ if generate_doc_btn:
                     
                     chk_counter = 1
                     
+                    # 1. Plywood
                     add_heading_14(doc, f"{chk_counter}. Plywood {conf['ply_thick']}:")
                     add_eq(doc, f"W_plywood = {conf['w']:.2f} KN/m²")
                     add_eq(doc, f"Max Spacing = {conf['s_spc']} m\n")
@@ -484,6 +504,7 @@ if generate_doc_btn:
                     chk_counter += 1
                     doc.add_page_break() 
                     
+                    # 2. Secondary
                     max_s_span = max([float(x.strip()) for x in conf['s_sp'].split(',')])
                     add_heading_14(doc, f"{chk_counter}. Secondary Decking {conf['s_sec']}:")
                     add_eq(doc, f"- Secondary Beam length = {conf['s_L']:.2f} m")
@@ -518,6 +539,7 @@ if generate_doc_btn:
                     
                     doc.add_page_break() 
                     
+                    # 3. Main
                     max_m_span = max([float(x.strip()) for x in conf['m_sp'].split(',')])
                     add_heading_14(doc, f"{chk_counter}. Main Decking {conf['m_sec']}:")
                     add_eq(doc, f"- Main Beam length = {conf['m_L']:.2f} m")
@@ -561,6 +583,7 @@ if generate_doc_btn:
                     
                     doc.add_page_break() 
 
+                    # 4. Support
                     if conf.get('t_allow') is not None and conf['t_allow'] < 900:
                         support_title = conf['t_name']
                         display_name = conf['t_name']
@@ -575,6 +598,7 @@ if generate_doc_btn:
                         add_word_check(doc, "Check for Support", m_R, conf['t_allow'], "KN")
                         chk_counter += 1
 
+                # ----------------- STRONGBACK (Side-by-Side Diagrams) -----------------
                 if conf.get('strongback', {}).get('active'):
                     sb = conf['strongback']
                     doc.add_page_break()
@@ -642,6 +666,7 @@ if generate_doc_btn:
                         p_rx.add_run().add_picture(io.BytesIO(sb['img_rx_single']), width=Cm(10.0))
                         add_centered_text(doc, "Reactions Diagram", size=12)
 
+                # ----------------- WIND & TILTING -----------------
                 if conf.get('cat') == 'vertical' and conf.get('tilting', {}).get('active'):
                     td = conf['tilting']
                     doc.add_page_break()
