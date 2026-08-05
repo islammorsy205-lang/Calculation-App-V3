@@ -8,7 +8,7 @@ import os
 import ast
 import re
 import matplotlib
-matplotlib.use('Agg') 
+matplotlib.use('Agg') # 💡 وضع الخوادم لمنع أي انهيار للواجهة
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from docx import Document
@@ -17,13 +17,13 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-# استدعاء دوال البناء الخاصة بالمشروع
-from report_builder import insert_blue_banner, append_pdf_stream_to_word, add_eq
-
 # =========================================================
-# 1. Native HTML Parser Engine 
+# 1. Native HTML Parser Engine (Extracting EVERYTHING Safely)
 # =========================================================
 def parse_bridge_html_native(html_content):
+    """يقرأ مصفوفات الجافاسكريبت وجداول الـ HTML بنظام الاستخراج النصي الآمن تماماً لتجنب أعطال الذاكرة"""
+    
+    # 1. Extract Arrays using pure string finding
     def extract_array_str(var_name):
         start_marker = f"const {var_name}"
         idx_start = html_content.find(start_marker)
@@ -47,8 +47,9 @@ def parse_bridge_html_native(html_content):
         nodes = ast.literal_eval(clean_js_to_python(nodes_raw))
         elements = ast.literal_eval(clean_js_to_python(elems_raw))
     except Exception as e:
-        st.error(f"⚠️ خطأ في قراءة المصفوفات: {e}")
+        st.error(f"⚠️ خطأ في قراءة مصفوفات النموذج: {e}")
 
+    # 2. Extract Tables Natively (Bypassing Pandas to prevent Crashes)
     tables = []
     table_blocks = re.findall(r'<table.*?>(.*?)</table>', html_content, re.DOTALL | re.IGNORECASE)
     
@@ -66,7 +67,7 @@ def parse_bridge_html_native(html_content):
     return nodes, elements, tables
 
 # =========================================================
-# 2. SAP2000 Plotting Engine
+# 2. SAP2000 Plotting Engine (All Diagrams & Styles)
 # =========================================================
 def safe_render_fig(fig):
     try:
@@ -107,11 +108,13 @@ def draw_sap2000_forces(val_key, nodes, elements, scale, is_axial=False):
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
+    
     nodes_dict = draw_base_structure(ax, nodes, elements)
 
     for el in elements:
         n1, n2 = nodes_dict.get(el['i']), nodes_dict.get(el['j'])
         if not n1 or not n2: continue
+        
         x1, y1 = float(n1['x']), float(n1['y'])
         x2, y2 = float(n2['x']), float(n2['y'])
         dx, dy = x2 - x1, y2 - y1
@@ -127,6 +130,7 @@ def draw_sap2000_forces(val_key, nodes, elements, scale, is_axial=False):
         if len(vals_orig) == 0: continue
         
         plot_vals = -vals_orig if val_key != 'N' else vals_orig
+        
         px_arr = x1 + c * (ts * L_s) - s * plot_vals * scale
         py_arr = y1 + s * (ts * L_s) + c * plot_vals * scale
         
@@ -157,6 +161,7 @@ def draw_sap2000_deflection(nodes, elements, defl_scale):
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
+    
     nodes_dict = draw_base_structure(ax, nodes, elements)
     max_defl = 0
     max_pt = None
@@ -260,6 +265,42 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         r.font.rtl = False
         if color: r.font.color.rgb = color
         return p
+
+    def add_native_table_to_word(doc, table_data, title):
+        if not table_data or len(table_data) < 2: return
+        add_line(title, bold=True, size=13, color=RGBColor(0,0,128))
+        
+        cols_count = len(table_data[0])
+        table = doc.add_table(rows=len(table_data), cols=cols_count)
+        
+        # 💡 الحل الجذري هنا لتخطي خطأ הستايل
+        try:
+            table.style = 'Table Grid'
+        except Exception:
+            try:
+                table.style = 'TableGrid'
+            except Exception:
+                pass # تجاهل الستايل واستخدام الافتراضي
+        
+        for r_idx, row_data in enumerate(table_data):
+            row_cells = table.rows[r_idx].cells
+            for c_idx, cell_text in enumerate(row_data):
+                if c_idx < cols_count:
+                    row_cells[c_idx].text = str(cell_text)
+                    for paragraph in row_cells[c_idx].paragraphs:
+                        for run in paragraph.runs:
+                            run.font.size = Pt(8)
+                            if r_idx == 0:
+                                run.font.bold = True
+                            else:
+                                text_up = str(cell_text).upper()
+                                if "PASS" in text_up or "SAFE" in text_up:
+                                    run.font.color.rgb = RGBColor(0, 128, 0)
+                                    run.font.bold = True
+                                elif "FAIL" in text_up or "UNSAFE" in text_up:
+                                    run.font.color.rgb = RGBColor(255, 0, 0)
+                                    run.font.bold = True
+        doc.add_paragraph()
 
     # --- Cover Page Replacements ---
     def remove_hardcoded_prefix(p):
@@ -374,31 +415,7 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
     for i, table_data in enumerate(tables):
         if not table_data or len(table_data) < 2: continue
         title = table_titles[i] if i < len(table_titles) else f"Data Table {i+1}"
-        add_line(f"Table {i+1}: {title}", bold=True, size=11, color=RGBColor(0,0,128))
-        
-        cols_count = len(table_data[0])
-        table = doc.add_table(rows=len(table_data), cols=cols_count)
-        table.style = 'Table Grid'
-        
-        for r_idx, row_data in enumerate(table_data):
-            row_cells = table.rows[r_idx].cells
-            for c_idx, cell_text in enumerate(row_data):
-                if c_idx < cols_count:
-                    row_cells[c_idx].text = str(cell_text)
-                    for paragraph in row_cells[c_idx].paragraphs:
-                        for run in paragraph.runs:
-                            run.font.size = Pt(8)
-                            if r_idx == 0:
-                                run.font.bold = True
-                            else:
-                                text_up = str(cell_text).upper()
-                                if "PASS" in text_up or "SAFE" in text_up:
-                                    run.font.color.rgb = RGBColor(0, 128, 0)
-                                    run.font.bold = True
-                                elif "FAIL" in text_up or "UNSAFE" in text_up:
-                                    run.font.color.rgb = RGBColor(255, 0, 0)
-                                    run.font.bold = True
-        doc.add_paragraph()
+        add_native_table_to_word(doc, table_data, f"Table {i+1}: {title}")
 
     # 2. Diagrams in Specific Order matching Images
     doc.add_page_break()
