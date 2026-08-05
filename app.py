@@ -101,7 +101,8 @@ def_live_load = 1.50 if "BS" in ref_code else 2.40
 st.divider()
 st.subheader("2. Structural System Configurator")
 
-sys_cat = st.radio("Select Structural Category:", ["Slab Elements", "Vertical Elements (Walls, Columns)", "Inclined Elements (Frames)", "Slab Back-propping", "Bridges"], horizontal=True)
+# 💡 تمت إضافة خيار الكباري والأشكال المتقدمة للقائمة
+sys_cat = st.radio("Select Structural Category:", ["Slab Elements", "Vertical Elements (Walls, Columns)", "Inclined Elements (Frames)", "Slab Back-propping", "Bridges", "Advanced Shapes (Curved/Multi)"], horizontal=True)
 
 if "Inclined Elements" in sys_cat:
     import inclined_master
@@ -113,6 +114,7 @@ if "Back-propping" in sys_cat:
     backprop_master.render_backprop_module(ref_code)
     st.stop()
 
+# 💡 تمرير بيانات المشروع لملف الكباري لتوليد النوتة بشكل متطابق مع باقي البرنامج
 if "Bridges" in sys_cat:
     import bridge_master
     proj_info = {
@@ -122,6 +124,12 @@ if "Bridges" in sys_cat:
         "cover_img": cover_img, "data_sheets": data_sheets
     }
     bridge_master.render_bridge_module(proj_info)
+    st.stop()
+
+# 💡 استدعاء ملف الأشكال المتقدمة
+if "Advanced Shapes" in sys_cat:
+    import advanced_shape_master
+    advanced_shape_master.render_advanced_shape_module()
     st.stop()
 
 configs = []
