@@ -11,8 +11,8 @@ from matplotlib.patches import Polygon
 from docx import Document
 from docx.shared import Cm, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
+from docx.oxml import OxmlElement, parse_xml
+from docx.oxml.ns import nsdecls, qn
 
 try:
     from config import SECTIONS_DB, STRUTS_DB
@@ -23,56 +23,145 @@ except ImportError:
 # =========================================================
 # 1. Geometry & Mesh Generators (The Core Engine)
 # =========================================================
-def build_multi_segment_mesh(segments, applied_w, sec_props, supports, struts):
-    nodes = [[0.0, 0.0]]
+def build_multi_segment_mesh(segments, sec_props, loads, struts, base_sec, supports, corner_sup):
+    nodes = []
     elements = []
     nodal_loads = []
     
+    node_tol = 1e-4
+    def get_or_add_node(x, y):
+        for i, n in enumerate(nodes):
+            if abs(n[0] - x) < node_tol and abs(n[1] - y) < node_tol:
+                return i
+        nodes.append([x, y])
+        return len(nodes) - 1
+
+    # 1. بناء الأضلاع المكسرة
     curr_x, curr_y = 0.0, 0.0
+    seg_start_coords = []
+    
     for i, seg in enumerate(segments):
         L = seg['L']
         ang_rad = np.radians(seg['angle'])
+        seg_start_coords.append((curr_x, curr_y))
+        
+        keys = [0.0, L]
+        for st in struts:
+            if st['seg_idx'] == i: keys.append(st['dist'])
+        for ld in loads:
+            if ld['seg_idx'] == i:
+                keys.append(ld['start'])
+                keys.append(ld['end'])
+        
+        num_sub = max(1, int(np.ceil(L / 0.25)))
+        for p in np.linspace(0, L, num_sub+1): keys.append(p)
+            
+        keys = sorted(list(set([round(k, 4) for k in keys if 0 <= k <= L + 1e-5])))
+        
+        node_indices = []
+        for k in keys:
+            px = curr_x + k * np.cos(ang_rad)
+            py = curr_y + k * np.sin(ang_rad)
+            node_indices.append(get_or_add_node(px, py))
+            
+        for j in range(len(keys)-1):
+            n1, n2 = node_indices[j], node_indices[j+1]
+            k_mid = (keys[j] + keys[j+1]) / 2.0
+            
+            p_x1, p_y1, p_x2, p_y2 = 0.0, 0.0, 0.0, 0.0
+            
+            for ld in loads:
+                if ld['seg_idx'] == i and ld['type'] != 'Point Load':
+                    if ld['start'] - 1e-4 <= k_mid <= ld['end'] + 1e-4:
+                        L_ld = max(ld['end'] - ld['start'], 1e-5)
+                        wa = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j] - ld['start']) / L_ld
+                        wb = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j+1] - ld['start']) / L_ld
+                        
+                        if ld['dir'] == 'Gravity (Vertical ↓)':
+                            p_y1 -= wa; p_y2 -= wb
+                        else: 
+                            c, s = np.cos(ang_rad), np.sin(ang_rad)
+                            p_x1 += wa * s; p_y1 -= wa * c
+                            p_x2 += wb * s; p_y2 -= wb * c
+                            
+            elements.append({
+                'type': 'frame', 'group': 'segment', 'sec': sec_props['name'],
+                'n1': n1, 'n2': n2, 'px1': p_x1, 'py1': p_y1, 'px2': p_x2, 'py2': p_y2,
+                'E': sec_props['E'] * 10000.0, 'A': sec_props['A'], 'I': sec_props['I'] / 100000000.0,
+                'seg_idx': i
+            })
+            
+        for ld in loads:
+            if ld['seg_idx'] == i and ld['type'] == 'Point Load':
+                try:
+                    idx = keys.index(round(ld['start'], 4))
+                    nid = node_indices[idx]
+                    if ld['dir'] == 'Gravity (Vertical ↓)':
+                        nodal_loads.append({'node': nid, 'Fx': 0.0, 'Fy': -ld['w1']})
+                    else:
+                        c, s = np.cos(ang_rad), np.sin(ang_rad)
+                        nodal_loads.append({'node': nid, 'Fx': ld['w1']*s, 'Fy': -ld['w1']*c})
+                except ValueError: pass
+                
         curr_x += L * np.cos(ang_rad)
         curr_y += L * np.sin(ang_rad)
-        nodes.append([curr_x, curr_y])
-        
-    for i in range(len(nodes)-1):
-        x1, y1 = nodes[i]
-        x2, y2 = nodes[i+1]
-        
-        elements.append({
-            'type': 'frame', 'sec': sec_props['name'],
-            'n1': i, 'n2': i+1,
-            'px1': 0.0, 'py1': -applied_w, 'px2': 0.0, 'py2': -applied_w,
-            'E': sec_props['E'] * 10000.0, 
-            'A': sec_props['A'], 
-            'I': sec_props['I'] / 100000000.0
-        })
-        
-    supports_list = []
-    supports_list.append({'node': 0, 'type': supports['start'], 'angle': 0.0})
-    supports_list.append({'node': len(nodes)-1, 'type': supports['end'], 'angle': 0.0})
+
+    # 2. الأرضية أو الكمرة السفلية
+    base_x_pts = [0.0]
+    for n in nodes: base_x_pts.append(n[0])
+    for st in struts: base_x_pts.append(st['gx'])
+    for sup in supports: base_x_pts.append(sup['x'])
     
-    for strut in struts:
-        node_idx = strut['node_idx']
-        strut_type = strut['sec']
+    base_x_pts = sorted(list(set([round(x, 4) for x in base_x_pts])))
+    base_node_map = {}
+    for x in base_x_pts:
+        base_node_map[x] = get_or_add_node(x, 0.0)
         
-        ground_x = nodes[node_idx][0]
-        ground_y = 0.0
-        nodes.append([ground_x, ground_y])
-        ground_node_idx = len(nodes) - 1
+    if base_sec != "None (Direct to Ground)":
+        b_props = SECTIONS_DB.get(base_sec, {'E': 2100.0, 'A': 0.00343, 'I': 412.0})
+        for j in range(len(base_x_pts)-1):
+            n1 = base_node_map[base_x_pts[j]]
+            n2 = base_node_map[base_x_pts[j+1]]
+            elements.append({
+                'type': 'frame', 'group': 'base', 'sec': base_sec,
+                'n1': n1, 'n2': n2, 'px1': 0.0, 'py1': 0.0, 'px2': 0.0, 'py2': 0.0,
+                'E': b_props.get('E', 2100.0) * 10000.0, 'A': b_props.get('A', b_props.get('A_cm2', 34.3)/10000.0), 
+                'I': b_props.get('I', b_props.get('I_cm4', 412.0)) / 100000000.0
+            })
+
+    # 3. النهايز
+    for st in struts:
+        seg_idx = st['seg_idx']
+        dist = st['dist']
+        gx = st['gx']
         
-        supports_list.append({'node': ground_node_idx, 'type': 'Hinged', 'angle': 0.0})
+        ang_rad = np.radians(segments[seg_idx]['angle'])
+        sx, sy = seg_start_coords[seg_idx]
+        nx = sx + dist * np.cos(ang_rad)
+        ny = sy + dist * np.sin(ang_rad)
+        
+        top_node = get_or_add_node(nx, ny)
+        bot_node = get_or_add_node(gx, 0.0)
+        
         elements.append({
-            'type': 'truss', 'sec': strut_type,
-            'n1': ground_node_idx, 'n2': node_idx,
+            'type': 'truss', 'group': 'strut', 'sec': st['sec'],
+            'n1': bot_node, 'n2': top_node,
             'E': 21000000.0, 'A': 0.001
         })
+
+    # 4. الركائز
+    supports_list = []
+    supports_list.append({'node': 0, 'type': corner_sup['type'], 'angle': corner_sup['angle']})
+    for sup in supports:
+        nid = get_or_add_node(sup['x'], 0.0)
+        supports_list.append({'node': nid, 'type': sup['type'], 'angle': 0.0})
         
     display_nodes = set([s['node'] for s in supports_list])
-    return nodes, elements, nodal_loads, display_nodes, supports_list
+    display_nodes.add(len(nodes)-1) 
 
-def build_curved_mesh(span, rise, num_segments, applied_w, sec_props, supports, struts_x_positions, strut_sec):
+    return nodes, elements, nodal_loads, display_nodes, supports_list, seg_start_coords
+
+def build_curved_mesh(span, rise, num_segments, applied_w, point_load, sec_props, supports, struts_x_positions, strut_sec, base_sec):
     nodes = []
     elements = []
     nodal_loads = []
@@ -93,58 +182,79 @@ def build_curved_mesh(span, rise, num_segments, applied_w, sec_props, supports, 
         
     for i in range(num_segments):
         elements.append({
-            'type': 'frame', 'sec': sec_props['name'],
+            'type': 'frame', 'group': 'segment', 'sec': sec_props['name'],
             'n1': i, 'n2': i+1,
             'px1': 0.0, 'py1': -applied_w, 'px2': 0.0, 'py2': -applied_w,
             'E': sec_props['E'] * 10000.0, 
             'A': sec_props['A'], 
-            'I': sec_props['I'] / 100000000.0
+            'I': sec_props['I'] / 100000000.0,
+            'seg_idx': i
         })
         
+    if abs(point_load) > 0.1:
+        crown_idx = num_segments // 2
+        nodal_loads.append({'node': crown_idx, 'Fx': 0.0, 'Fy': -point_load})
+
     supports_list = []
     supports_list.append({'node': 0, 'type': supports['start'], 'angle': 0.0})
     supports_list.append({'node': num_segments, 'type': supports['end'], 'angle': 0.0})
     
+    base_x_pts = [0.0, span]
+    for sx in struts_x_positions: base_x_pts.append(sx)
+    base_x_pts = sorted(list(set([round(x, 4) for x in base_x_pts])))
+    
+    base_node_map = {}
+    for x in base_x_pts:
+        nodes.append([x, 0.0])
+        base_node_map[x] = len(nodes) - 1
+
+    if base_sec != "None (Direct to Ground)":
+        b_props = SECTIONS_DB.get(base_sec, {'E': 2100.0, 'A': 0.00343, 'I': 412.0})
+        for j in range(len(base_x_pts)-1):
+            n1 = base_node_map[base_x_pts[j]]
+            n2 = base_node_map[base_x_pts[j+1]]
+            elements.append({
+                'type': 'frame', 'group': 'base', 'sec': base_sec,
+                'n1': n1, 'n2': n2, 'px1': 0.0, 'py1': 0.0, 'px2': 0.0, 'py2': 0.0,
+                'E': b_props.get('E', 2100.0) * 10000.0, 'A': b_props.get('A', b_props.get('A_cm2', 34.3)/10000.0), 
+                'I': b_props.get('I', b_props.get('I_cm4', 412.0)) / 100000000.0
+            })
+
     for sx in struts_x_positions:
         distances = [abs(nodes[i][0] - sx) for i in range(num_segments + 1)]
         closest_node = np.argmin(distances)
+        ground_node_idx = base_node_map[sx]
         
-        ground_x = nodes[closest_node][0]
-        ground_y = 0.0
-        if ground_y < nodes[closest_node][1] - 0.1: 
-            nodes.append([ground_x, ground_y])
-            ground_node_idx = len(nodes) - 1
-            supports_list.append({'node': ground_node_idx, 'type': 'Hinged', 'angle': 0.0})
-            
-            elements.append({
-                'type': 'truss', 'sec': strut_sec,
-                'n1': ground_node_idx, 'n2': closest_node,
-                'E': 21000000.0, 'A': 0.001
-            })
+        supports_list.append({'node': ground_node_idx, 'type': 'Hinged', 'angle': 0.0})
+        elements.append({
+            'type': 'truss', 'group': 'strut', 'sec': strut_sec,
+            'n1': ground_node_idx, 'n2': closest_node,
+            'E': 21000000.0, 'A': 0.001
+        })
 
     display_nodes = set([s['node'] for s in supports_list])
+    display_nodes.add(num_segments)
+    
     return nodes, elements, nodal_loads, display_nodes, supports_list
 
 # =========================================================
-# 2. Advanced 2D Frame FEA Solver (Matrix Method)
+# 2. Advanced FEA Solver
 # =========================================================
 def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
-    num_nodes = len(nodes)
-    NDOF = num_nodes * 3
+    NDOF = len(nodes) * 3
     K = np.zeros((NDOF, NDOF))
     F = np.zeros(NDOF)
     
     for el in elements:
         n1, n2 = el['n1'], el['n2']
-        x1, y1 = nodes[n1][0], nodes[n1][1]
-        x2, y2 = nodes[n2][0], nodes[n2][1]
+        x1, y1 = nodes[n1]
+        x2, y2 = nodes[n2]
         L = np.hypot(x2 - x1, y2 - y1)
         if L < 1e-5: continue
         c, s = (x2 - x1) / L, (y2 - y1) / L
         el['L'], el['c'], el['s'] = L, c, s
         
         E, A, I = el['E'], el['A'], el.get('I', 0.00005)
-        
         T = np.array([
             [c, s, 0, 0, 0, 0], [-s, c, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0],
             [0, 0, 0, c, s, 0], [0, 0, 0, -s, c, 0], [0, 0, 0, 0, 0, 1]
@@ -152,8 +262,8 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
         
         if el['type'] == 'truss':
             k_loc = np.zeros((6, 6))
-            k_loc[0, 0] = E * A / L; k_loc[3, 3] = E * A / L
-            k_loc[0, 3] = -E * A / L; k_loc[3, 0] = -E * A / L
+            k_loc[0,0] = k_loc[3,3] = E*A/L
+            k_loc[0,3] = k_loc[3,0] = -E*A/L
         else:
             k_loc = np.array([
                 [E*A/L, 0, 0, -E*A/L, 0, 0],
@@ -163,61 +273,50 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
                 [0, -12*E*I/L**3, -6*E*I/L**2, 0, 12*E*I/L**3, -6*E*I/L**2],
                 [0, 6*E*I/L**2, 2*E*I/L, 0, -6*E*I/L**2, 4*E*I/L]
             ])
-            
             px1, py1, px2, py2 = el.get('px1',0), el.get('py1',0), el.get('px2',0), el.get('py2',0)
-            f_eq_loc = np.array([
-                (2*px1 + px2)*L/6.0,
-                (7*py1 + 3*py2)*L/20.0,
-                (3*py1 + 2*py2)*L**2/60.0,
-                (px1 + 2*px2)*L/6.0,
-                (3*py1 + 7*py2)*L/20.0,
-                -(2*py1 + 3*py2)*L**2/60.0
+            f_loc = np.array([
+                (2*px1 + px2)*L/6.0, (7*py1 + 3*py2)*L/20.0, (3*py1 + 2*py2)*L**2/60.0,
+                (px1 + 2*px2)*L/6.0, (3*py1 + 7*py2)*L/20.0, -(2*py1 + 3*py2)*L**2/60.0
             ])
-            f_eq_glob = T.T @ f_eq_loc
-            dof_idx = [3*n1, 3*n1+1, 3*n1+2, 3*n2, 3*n2+1, 3*n2+2]
-            for r in range(6): F[dof_idx[r]] += f_eq_glob[r]
+            f_glob = T.T @ f_loc
+            dof = [3*n1, 3*n1+1, 3*n1+2, 3*n2, 3*n2+1, 3*n2+2]
+            for r in range(6): F[dof[r]] += f_glob[r]
             
         k_glob = T.T @ k_loc @ T
-        dof_idx = [3*n1, 3*n1+1, 3*n1+2, 3*n2, 3*n2+1, 3*n2+2]
+        dof = [3*n1, 3*n1+1, 3*n1+2, 3*n2, 3*n2+1, 3*n2+2]
         for r in range(6):
-            for col in range(6):
-                K[dof_idx[r], dof_idx[col]] += k_glob[r, col]
+            for col in range(6): K[dof[r], dof[col]] += k_glob[r, col]
                 
     for nl in nodal_loads:
-        F[3*nl['node'] + 0] += nl['Fx']
-        F[3*nl['node'] + 1] += nl['Fy']
+        F[3*nl['node']] += nl['Fx']
+        F[3*nl['node']+1] += nl['Fy']
             
     K_orig = K.copy()
     fixed_dofs = []
-    K_penalty = 1e12
+    K_pen = 1e12
     
     for sup in supports_list:
-        n = sup['node']
-        t = sup['type']
-        a = sup['angle']
+        n, t, a = sup['node'], sup['type'], sup['angle']
         if t == 'Fixed': fixed_dofs.extend([3*n, 3*n+1, 3*n+2])
         elif t == 'Hinged': fixed_dofs.extend([3*n, 3*n+1])
         elif t == 'Roller':
-            if abs(a % 180) < 1e-5: fixed_dofs.append(3*n+1)
-            elif abs((a - 90) % 180) < 1e-5: fixed_dofs.append(3*n)
-            else:
-                rad = np.radians(a)
-                nx, ny = -np.sin(rad), np.cos(rad) 
-                K[3*n, 3*n] += K_penalty * nx**2; K[3*n+1, 3*n+1] += K_penalty * ny**2
-                K[3*n, 3*n+1] += K_penalty * nx * ny; K[3*n+1, 3*n] += K_penalty * nx * ny
+            rad = np.radians(a)
+            nx, ny = -np.sin(rad), np.cos(rad) 
+            K[3*n, 3*n] += K_pen*nx**2; K[3*n+1, 3*n+1] += K_pen*ny**2
+            K[3*n, 3*n+1] += K_pen*nx*ny; K[3*n+1, 3*n] += K_pen*nx*ny
 
     free_dof = [i for i in range(NDOF) if i not in fixed_dofs]
     K_ff = K[np.ix_(free_dof, free_dof)]
     F_f = F[free_dof]
     
     U = np.zeros(NDOF)
-    try: U_f = np.linalg.solve(K_ff, F_f)
-    except np.linalg.LinAlgError: U_f = np.linalg.lstsq(K_ff, F_f, rcond=None)[0]
+    try: U[free_dof] = np.linalg.solve(K_ff, F_f)
+    except: U[free_dof] = np.linalg.lstsq(K_ff, F_f, rcond=None)[0]
     
-    U[free_dof] = U_f
     R_reactions = K_orig @ U - F 
     
     for el in elements:
+        if 'L' not in el: continue
         n1, n2 = el['n1'], el['n2']
         c, s, L = el['c'], el['s'], el['L']
         E, A, I = el['E'], el['A'], el.get('I', 0.00005)
@@ -235,19 +334,16 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
             el['internal'].update({'N': [N_val, N_val], 'V': [0,0], 'M': [0,0], 'x': [0, L], 'v_rel': [0,0]})
         else:
             k_loc = np.array([
-                [E*A/L, 0, 0, -E*A/L, 0, 0],
-                [0, 12*E*I/L**3, 6*E*I/L**2, 0, -12*E*I/L**3, 6*E*I/L**2],
-                [0, 6*E*I/L**2, 4*E*I/L, 0, -6*E*I/L**2, 2*E*I/L],
-                [-E*A/L, 0, 0, E*A/L, 0, 0],
-                [0, -12*E*I/L**3, -6*E*I/L**2, 0, 12*E*I/L**3, -6*E*I/L**2],
-                [0, 6*E*I/L**2, 2*E*I/L, 0, -6*E*I/el['L']**2, 4*E*I/el['L']]
+                [E*A/L, 0, 0, -E*A/L, 0, 0], [0, 12*E*I/L**3, 6*E*I/L**2, 0, -12*E*I/L**3, 6*E*I/L**2],
+                [0, 6*E*I/L**2, 4*E*I/L, 0, -6*E*I/L**2, 2*E*I/L], [-E*A/L, 0, 0, E*A/L, 0, 0],
+                [0, -12*E*I/L**3, -6*E*I/L**2, 0, 12*E*I/L**3, -6*E*I/L**2], [0, 6*E*I/L**2, 2*E*I/L, 0, -6*E*I/L**2, 4*E*I/L]
             ])
             px1, py1, px2, py2 = el.get('px1',0), el.get('py1',0), el.get('px2',0), el.get('py2',0)
-            f_eq_loc = np.array([
+            f_loc = np.array([
                 (2*px1 + px2)*L/6.0, (7*py1 + 3*py2)*L/20.0, (3*py1 + 2*py2)*L**2/60.0,
                 (px1 + 2*px2)*L/6.0, (3*py1 + 7*py2)*L/20.0, -(2*py1 + 3*py2)*L**2/60.0
             ])
-            f_end = k_loc @ u_loc - f_eq_loc
+            f_end = k_loc @ u_loc - f_loc
             
             xs = np.linspace(0, L, 11) 
             N_arr, V_arr, M_arr, v_rel_arr = np.zeros_like(xs), np.zeros_like(xs), np.zeros_like(xs), np.zeros_like(xs)
@@ -268,7 +364,7 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
     return U, R_reactions
 
 # =========================================================
-# 3. SAP2000 Style Plotting Engine
+# 3. Plotting Engine (Live Preview & SAP2000 Style)
 # =========================================================
 def safe_render_fig(fig):
     try:
@@ -281,6 +377,8 @@ def safe_render_fig(fig):
 
 def draw_base_geometry(ax, nodes, elements, supports_list):
     for el in elements:
+        if 'L' not in el: continue
+        if el['group'] == 'base' and el['sec'] == "None (Direct to Ground)": continue
         n1, n2 = nodes[el['n1']], nodes[el['n2']]
         color = 'black' if el['type'] == 'frame' else 'gray'
         style = '-' if el['type'] == 'frame' else '--'
@@ -301,47 +399,89 @@ def draw_base_geometry(ax, nodes, elements, supports_list):
             ax.add_patch(plt.Circle((x, y-0.38), 0.08, facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
             ax.plot([x-0.3, x+0.3], [y-0.46, y-0.46], color='limegreen', lw=1.5, zorder=4)
 
-def draw_live_preview(nodes, elements, supports_list, applied_w):
+def draw_live_preview(nodes, elements, supports_list, shape_mode, **kwargs):
+    mpl.rcParams['font.family'] = 'sans-serif'
+    mpl.rcParams['font.sans-serif'] = ['Arial']
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
     
     draw_base_geometry(ax, nodes, elements, supports_list)
 
-    if applied_w > 0.1:
-        max_y = max([n[1] for n in nodes])
-        scale_h = 1.0
+    if shape_mode == "🔗 Multi-Segment (Polygonal)":
+        loads = kwargs.get('loads', [])
+        segments = kwargs.get('segments', [])
+        seg_starts = kwargs.get('seg_starts', [])
         
-        for el in elements:
-            if el['type'] == 'frame':
-                n1, n2 = nodes[el['n1']], nodes[el['n2']]
-                x1, y1 = n1[0], n1[1]
-                x2, y2 = n2[0], n2[1]
-                h = scale_h
-                
-                poly = Polygon([(x1,y1), (x1, y1+h), (x2, y2+h), (x2, y2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2)
-                ax.add_patch(poly)
-                
-                dx, dy = x2-x1, y2-y1
-                num_arr = max(2, int(np.hypot(dx, dy) / 0.5))
-                for i in range(1, num_arr):
-                    fx, fy = x1 + dx*(i/num_arr), y1 + dy*(i/num_arr)
-                    ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
-        
-        mid_x = sum([n[0] for n in nodes])/len(nodes)
-        ax.text(mid_x, max_y + scale_h + 0.3, f"{applied_w:.2f} kN/m", color='blue', fontsize=9, fontweight='bold', ha='center',
-                bbox=dict(facecolor='white', edgecolor='blue', alpha=0.8, pad=0.5))
+        for i, seg in enumerate(segments):
+            sx, sy = seg_starts[i]
+            ang = np.radians(seg['angle'])
+            mx = sx + (seg['L']/2) * np.cos(ang)
+            my = sy + (seg['L']/2) * np.sin(ang)
+            ax.text(mx - np.sin(ang)*0.4, my + np.cos(ang)*0.4, f"Seg {i+1}", color='black', fontsize=7, ha='center', va='center', rotation=seg['angle'])
+
+        scale_ld = 0.05
+        for ld in loads:
+            i = ld['seg_idx']
+            ang = np.radians(segments[i]['angle'])
+            c, s = np.cos(ang), np.sin(ang)
+            sx, sy = seg_starts[i]
+            
+            px1, py1 = sx + ld['start']*c, sy + ld['start']*s
+            px2, py2 = sx + ld['end']*c, sy + ld['end']*s
+            w1, w2 = ld['w1'], ld['w2']
+            
+            if ld['type'] == 'Point Load':
+                h = 1.0
+                if ld['dir'] == 'Gravity (Vertical ↓)':
+                    ax.arrow(px1, py1+h, 0, -h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue')
+                    ax.text(px1, py1+h+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center')
+                else:
+                    start_x, start_y = px1 - s*h, py1 + c*h
+                    ax.arrow(start_x, start_y, s*h, -c*h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue')
+                    ax.text(start_x, start_y+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center', rotation=segments[i]['angle'])
+            else:
+                if ld['dir'] == 'Gravity (Vertical ↓)':
+                    hx1, hy1 = px1, py1 + w1 * scale_ld
+                    hx2, hy2 = px2, py2 + w2 * scale_ld
+                else:
+                    hx1, hy1 = px1 - s * w1 * scale_ld, py1 + c * w1 * scale_ld
+                    hx2, hy2 = px2 - s * w2 * scale_ld, py2 + c * w2 * scale_ld
+                    
+                ax.add_patch(Polygon([(px1,py1), (hx1,hy1), (hx2,hy2), (px2,py2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2))
+                ax.text(hx1, hy1+0.2, f"{w1}", color='blue', fontsize=6, ha='center')
+                ax.text(hx2, hy2+0.2, f"{w2}", color='blue', fontsize=6, ha='center')
+    else:
+        applied_w = kwargs.get('applied_w', 0)
+        if applied_w > 0.1:
+            max_y = max([n[1] for n in nodes])
+            scale_h = 1.0
+            for el in elements:
+                if el['type'] == 'frame' and el['group'] == 'segment':
+                    n1, n2 = nodes[el['n1']], nodes[el['n2']]
+                    x1, y1 = n1[0], n1[1]
+                    x2, y2 = n2[0], n2[1]
+                    h = scale_h
+                    poly = Polygon([(x1,y1), (x1, y1+h), (x2, y2+h), (x2, y2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2)
+                    ax.add_patch(poly)
+                    dx, dy = x2-x1, y2-y1
+                    num_arr = max(2, int(np.hypot(dx, dy) / 0.5))
+                    for i in range(1, num_arr):
+                        fx, fy = x1 + dx*(i/num_arr), y1 + dy*(i/num_arr)
+                        ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
+            
+            mid_x = sum([n[0] for n in nodes])/len(nodes)
+            ax.text(mid_x, max_y + scale_h + 0.3, f"{applied_w:.2f} kN/m", color='blue', fontsize=9, fontweight='bold', ha='center')
 
     for i, n in enumerate(nodes):
         if any(el['n1'] == i or el['n2'] == i for el in elements if el['type'] == 'frame'):
-            ax.text(n[0], n[1]+0.2, f"N{i}", color='firebrick', fontsize=7, ha='center', fontname='Arial')
+            ax.plot(n[0], n[1], 'ko', markersize=2)
 
     return safe_render_fig(fig)
 
 def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
     mpl.rcParams['font.family'] = 'sans-serif'
     mpl.rcParams['font.sans-serif'] = ['Arial']
-    
     figs_dict = {}
     
     # 1. Reactions
@@ -357,39 +497,56 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
         if abs(Ry) > 0.1:
             arr_c = 'blue' if Ry > 0 else 'red'
             sgn = 1 if Ry > 0 else -1
-            ax_r.arrow(x, y - sgn*0.8, 0, sgn*0.6, head_width=0.15, head_length=0.2, fc=arr_c, ec=arr_c, zorder=6)
+            ax_r.plot([x, x], [y - sgn*0.8, y], color=arr_c, lw=1.0)
+            ax_r.plot([x-0.15, x, x+0.15], [y-sgn*0.2, y, y-sgn*0.2], color=arr_c, lw=1.0)
             ax_r.text(x, y - sgn*1.0, f"{abs(Ry):.1f}", color='black', fontsize=8, ha='center', va='center')
+            
+        if abs(Rx) > 0.1:
+            arr_c = 'blue' if Rx > 0 else 'red'
+            sgn = 1 if Rx > 0 else -1
+            ax_r.plot([x - sgn*0.8, x], [y, y], color=arr_c, lw=1.0)
+            ax_r.plot([x-sgn*0.2, x, x-sgn*0.2], [y-0.15, y, y+0.15], color=arr_c, lw=1.0)
+            ax_r.text(x - sgn*1.0, y, f"{abs(Rx):.1f}", color='black', fontsize=8, ha='center', va='center')
+            
     figs_dict['React'] = safe_render_fig(fig_r)
     
-    # 2. Internal Forces (N, V, M)
+    # 2. Internal Forces (Decluttered)
     def create_force_plot(val_key, scale, c_pos, c_neg):
         fig_f, ax_f = plt.subplots(figsize=(8, 4))
         ax_f.set_aspect('equal', adjustable='datalim')
         ax_f.axis('off')
         draw_base_geometry(ax_f, nodes, elements, supports_list)
         
+        global_max = 0.0
+        for el in elements:
+            if el['type'] == 'frame' and el['group'] == 'segment': 
+                global_max = max(global_max, np.max(np.abs(el['internal'][val_key])))
+
         for el in elements:
             if el['type'] != 'frame': continue
             n1, n2 = nodes[el['n1']], nodes[el['n2']]
             x1, y1 = n1[0], n1[1]
             c, s, L = el['c'], el['s'], el['L']
             
-            xs_arr = el['internal']['x']
+            xs = el['internal']['x']
             vals = el['internal'][val_key]
             plot_vals = -vals if val_key != 'N' else vals
             
-            px_arr = x1 + c * xs_arr - s * plot_vals * scale
-            py_arr = y1 + s * xs_arr + c * plot_vals * scale
+            px = x1 + c * xs - s * plot_vals * scale
+            py = y1 + s * xs + c * plot_vals * scale
             
-            for k in range(len(px_arr)-1):
+            for k in range(len(px)-1):
                 color = c_pos if vals[k] >= 0 else c_neg
-                ax_f.plot([px_arr[k], px_arr[k+1]], [py_arr[k], py_arr[k+1]], color=color, lw=0.8)
-                lx, ly = x1 + c*xs_arr[k], y1 + s*xs_arr[k]
-                ax_f.plot([lx, px_arr[k]], [ly, py_arr[k]], color=color, lw=0.3, alpha=0.5)
+                ax_f.plot([px[k], px[k+1]], [py[k], py[k+1]], color=color, lw=0.8)
+                lx, ly = x1 + c*xs[k], y1 + s*xs[k]
+                ax_f.plot([lx, px[k]], [ly, py[k]], color=color, lw=0.3, alpha=0.5)
                 
             max_idx = np.argmax(np.abs(vals))
-            if abs(vals[max_idx]) > 0.1:
-                ax_f.text(px_arr[max_idx]-s*0.3, py_arr[max_idx]+c*0.3, f"{abs(vals[max_idx]):.1f}", fontsize=7, color='black', ha='center', va='center')
+            v_max = abs(vals[max_idx])
+            
+            # Smart Decluttering Filter
+            if v_max > 0.1 and (L > 0.4 or v_max >= global_max * 0.95):
+                ax_f.text(px[max_idx]-s*0.3, py[max_idx]+c*0.3, f"{v_max:.1f}", fontsize=7, color='black', ha='center', va='center')
                 
         return safe_render_fig(fig_f)
 
@@ -406,10 +563,17 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
     max_def = 0.0
     for el in elements:
         if el['type'] == 'frame':
+            xs = el['internal']['x']
+            v_rel = el['internal']['v_rel'] * 20.0 # Scale
+            x1, y1 = nodes[el['n1']]
+            c, s = el['c'], el['s']
+            px = x1 + c * xs - s * v_rel
+            py = y1 + s * xs + c * v_rel
+            ax_d.plot(px, py, color='red', linestyle='--', linewidth=1.2, alpha=0.8)
             max_def = max(max_def, np.max(np.abs(el['internal']['v_rel'])))
             
     if max_def > 0:
-        ax_d.text(nodes[0][0], nodes[0][1]+1.0, f"Max Relative Deflection = {max_def*1000:.2f} mm", color='red', fontsize=10, fontweight='bold')
+        ax_d.text(nodes[0][0], nodes[0][1]+1.0, f"Max Deflection = {max_def*1000:.2f} mm", color='red', fontsize=10, fontweight='bold')
     figs_dict['D'] = safe_render_fig(fig_d)
 
     return figs_dict
@@ -420,37 +584,43 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
 def render_advanced_shape_module():
     st.markdown("## 🎢 Advanced Shapes (Multi-Segment & Curved Plates)")
     
-    c_in, c_plot = st.columns([1.3, 1])
+    c_in, c_plot = st.columns([1.2, 1])
     
     with c_in:
         shape_mode = st.radio("Select Shape Type:", ["🔗 Multi-Segment (Polygonal)", "🌙 Curved Arch (2 Plates)"], horizontal=True)
         
         st.markdown("### 1. Geometry & Section")
-        # 💡 تم معالجة خيار الـ 2 Plates وجعله متاح للأنظمة المكسرة والدائرية
-        sec_source = st.radio("Section Type:", ["Standard Profile Database", "Custom 2 Plates Steel"], horizontal=True)
+        sec_source = st.radio("Section Type:", ["Standard Profile Database", "Custom 2-Plates Steel", "Custom Input Properties"], horizontal=True)
         
         if sec_source == "Standard Profile Database":
             sec_list = list(SECTIONS_DB.keys()) if SECTIONS_DB else ["Soldier U100"]
             sec_name = st.selectbox("Profile Section", sec_list)
             raw = SECTIONS_DB.get(sec_name, {})
-            # 💡 حماية وتوحيد قراءة الخصائص من قاعدة البيانات مهما كانت المسميات
+            # Safe access for Area and Inertia
             s_E = raw.get('E', 2100.0)
             s_A = raw.get('A', raw.get('A_cm2', 34.3) / 10000.0)
             s_I = raw.get('I', raw.get('I_cm4', 412.0))
-            sec_props = {'name': sec_name, 'E': s_E, 'A': s_A, 'I': s_I}
-        else:
+            sec_props = {'name': sec_name, 'E': s_E, 'A': s_A, 'I': s_I, 'Mall': raw.get('Mall', 13.1), 'Qall': raw.get('Qall', 100.8)}
+            
+        elif sec_source == "Custom 2-Plates Steel":
             cp1, cp2 = st.columns(2)
             p_height = cp1.number_input("Plates Depth / Height (mm)", value=300.0, step=10.0)
             p_thick = cp2.number_input("Plate Thickness (mm)", value=10.0, step=1.0)
             A_m2 = 2 * (p_height * p_thick) / 1000000.0
             I_cm4 = 2 * (p_thick * (p_height**3) / 12.0) / 10000.0
-            sec_props = {
-                'name': f"2 Plates ({int(p_height)}x{int(p_thick)}mm)",
-                'E': 2100.0,
-                'A': A_m2,
-                'I': I_cm4 
-            }
-            st.success(f"⚙️ Area = {A_m2*1000000:.1f} mm² | Inertia (Ixx) = {I_cm4:.1f} cm⁴")
+            m_all = st.number_input("Allowable Moment (kN.m)", value=30.0)
+            v_all = st.number_input("Allowable Shear (kN)", value=150.0)
+            sec_props = {'name': f"2 Plates ({int(p_height)}x{int(p_thick)}mm)", 'E': 2100.0, 'A': A_m2, 'I': I_cm4, 'Mall': m_all, 'Qall': v_all}
+            st.success(f"⚙️ Calculated Area = {A_m2*1000000:.1f} mm² | Inertia (Ixx) = {I_cm4:.1f} cm⁴")
+            
+        else:
+            cp1, cp2, cp3 = st.columns(3)
+            A_val = cp1.number_input("Area (cm²)", value=34.3) / 10000.0
+            I_val = cp2.number_input("Inertia Ixx (cm⁴)", value=412.0)
+            Z_val = cp3.number_input("Section Modulus Z (cm³)", value=82.0)
+            m_all = st.number_input("Allowable Moment (kN.m)", value=13.1)
+            v_all = st.number_input("Allowable Shear (kN)", value=100.8)
+            sec_props = {'name': "Custom Section", 'E': 2100.0, 'A': A_val, 'I': I_val, 'Mall': m_all, 'Qall': v_all}
 
         segments = []
         if shape_mode == "🔗 Multi-Segment (Polygonal)":
@@ -468,7 +638,35 @@ def render_advanced_shape_module():
             st.info(f"💡 Calculated Radius = **{(span**2)/(8*rise) + rise/2:.2f} m**")
 
         st.markdown("### 2. Loads & Supports")
-        applied_w = st.number_input("Uniform Vertical Gravity Load (kN/m)", value=25.0, step=1.0)
+        loads_data = []
+        applied_w = 0.0
+        
+        if shape_mode == "🔗 Multi-Segment (Polygonal)":
+            num_loads = st.number_input("Count of Loads", 1, 10, 1)
+            for i in range(int(num_loads)):
+                st.write(f"**Load {i+1}:**")
+                lc1, lc2, lc3 = st.columns(3)
+                s_idx = lc1.selectbox("On Segment No.", range(1, int(num_segs)+1), key=f"ld_s_{i}") - 1
+                l_type = lc2.selectbox("Type", ["Uniform", "Trapezoidal", "Point Load"], key=f"ld_t_{i}")
+                l_dir = lc3.selectbox("Direction", ["Gravity (Vertical ↓)", "Perpendicular (Local ↘)"], key=f"ld_d_{i}")
+                
+                sc1, sc2, sc3 = st.columns(3)
+                start = sc1.number_input("Start Dist (m)", 0.0, segments[s_idx]['L'], 0.0, key=f"ld_st_{i}")
+                w1 = sc2.number_input("Value W1 (kN/m or kN)", value=15.0, key=f"ld_w1_{i}")
+                
+                if l_type == "Uniform":
+                    end = sc3.number_input("End Dist (m)", 0.0, segments[s_idx]['L'], segments[s_idx]['L'], key=f"ld_en_{i}")
+                    w2 = w1
+                elif l_type == "Trapezoidal":
+                    end = sc3.number_input("End Dist (m)", 0.0, segments[s_idx]['L'], segments[s_idx]['L'], key=f"ld_en_{i}")
+                    w2 = st.number_input("Value W2 (kN/m)", value=5.0, key=f"ld_w2_{i}")
+                else:
+                    end = start; w2 = w1
+                    
+                loads_data.append({'seg_idx': s_idx, 'type': l_type, 'dir': l_dir, 'start': start, 'end': end, 'w1': w1, 'w2': w2})
+        else:
+            applied_w = st.number_input("Uniform Vertical Gravity Load (kN/m)", value=25.0, step=1.0)
+            point_load = st.number_input("Point Load at Crown (kN) [Optional]", value=0.0, step=1.0)
         
         st.markdown("**Supports & Struts:**")
         cs1, cs2 = st.columns(2)
@@ -497,16 +695,32 @@ def render_advanced_shape_module():
                 sx = scols[i%4].number_input(f"Strut {i+1} X (m)", value=(i+1)*span/(num_struts+1), step=0.5)
                 struts_x_pos.append(sx)
 
-    # 💡 توليد الـ Mesh قبل الـ Run عشان يترسم Live
+        st.markdown("### 5. Base System (Optional)")
+        bs1, bs2 = st.columns(2)
+        base_sec_list = ["Soldier U100", "None (Direct to Ground)"]
+        base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=1)
+        
+        c_sup = st.selectbox("Corner Support Type", ["Hinged", "Roller", "Fixed"])
+        c_ang = st.number_input("Corner Angle (°)", value=0.0, step=15.0)
+        
+        num_base_sups = st.number_input("Additional Ground Supports", 0, 10, 1)
+        base_sups = []
+        for i in range(int(num_base_sups)):
+            sp1, sp2 = st.columns(2)
+            sx = sp1.number_input(f"Sup {i+1} X (m)", value=float(i+1)*2.0)
+            styp = sp2.selectbox(f"Sup {i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}")
+            base_sups.append({'x': sx, 'type': styp})
+
+    # Generate Mesh Live Preview
     if shape_mode == "🔗 Multi-Segment (Polygonal)":
-        nodes, elements, nodal_loads, display_nodes, supports_list = build_multi_segment_mesh(segments, applied_w, sec_props, supports, struts_data)
+        nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_multi_segment_mesh(segments, sec_props, loads_data, struts_data, base_sec, base_sups, {'type': c_sup, 'angle': c_ang})
+        live_img = draw_live_preview(nodes, elements, supports_list, shape_mode, loads=loads_data, segments=segments, seg_starts=seg_starts)
     else:
-        nodes, elements, nodal_loads, display_nodes, supports_list = build_curved_mesh(span, rise, 20, applied_w, sec_props, supports, struts_x_pos, strut_sec)
+        nodes, elements, nodal_loads, display_nodes, supports_list = build_curved_mesh(span, rise, 20, applied_w, point_load, sec_props, supports, struts_x_pos, strut_sec, base_sec)
+        live_img = draw_live_preview(nodes, elements, supports_list, shape_mode, applied_w=applied_w)
 
     with c_plot:
-        st.markdown("<h4 style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px;'>Live Assigned Loads</h4>", unsafe_allow_html=True)
-        # 💡 استدعاء دالة الرسم Live
-        live_img = draw_live_preview(nodes, elements, supports_list, applied_w)
+        st.markdown("<h4 style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px;'>Live Geometry & Loads</h4>", unsafe_allow_html=True)
         st.image(live_img, use_container_width=True)
 
     st.markdown("---")
@@ -530,6 +744,20 @@ def render_advanced_shape_module():
             c_p1.image(img_bufs['N'], caption="Axial Force Diagram (kN)")
             c_p2.image(img_bufs['React'], caption="Support Reactions (kN)")
             st.image(img_bufs['D'], caption="Deflection Deformed Shape")
+            
+            # --- Safety Checks Quick Table ---
+            max_m, max_v = 0.0, 0.0
+            for el in elements:
+                if el['group'] == 'segment':
+                    max_m = max(max_m, np.max(np.abs(el['internal']['M'])))
+                    max_v = max(max_v, np.max(np.abs(el['internal']['V'])))
+                    
+            st.markdown("### 📊 Safety Summary")
+            df = pd.DataFrame([
+                {"Component": sec_props['name'], "Force Type": "Bending Moment", "Actual": f"{max_m:.2f} kN.m", "Allowable": f"{sec_props['Mall']:.2f} kN.m", "Status": "SAFE" if max_m <= sec_props['Mall'] else "UNSAFE"},
+                {"Component": sec_props['name'], "Force Type": "Shear Force", "Actual": f"{max_v:.2f} kN", "Allowable": f"{sec_props['Qall']:.2f} kN", "Status": "SAFE" if max_v <= sec_props['Qall'] else "UNSAFE"}
+            ])
+            st.table(df)
 
 if __name__ == "__main__":
     render_advanced_shape_module()
