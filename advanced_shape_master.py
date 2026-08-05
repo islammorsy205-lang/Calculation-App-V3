@@ -14,7 +14,6 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-# استدعاء قواعد البيانات ودوال النوتة من ملفاتك الأصلية
 try:
     from config import SECTIONS_DB, STRUTS_DB
     from report_builder import insert_blue_banner, add_eq, append_pdf_stream_to_word
@@ -29,7 +28,6 @@ def build_multi_segment_mesh(segments, applied_w, sec_props, supports, struts):
     elements = []
     nodal_loads = []
     
-    # 1. توليد النقط (Nodes)
     curr_x, curr_y = 0.0, 0.0
     for i, seg in enumerate(segments):
         L = seg['L']
@@ -38,7 +36,6 @@ def build_multi_segment_mesh(segments, applied_w, sec_props, supports, struts):
         curr_y += L * np.sin(ang_rad)
         nodes.append([curr_x, curr_y])
         
-    # 2. توليد العناصر (Elements) والأحمال
     for i in range(len(nodes)-1):
         x1, y1 = nodes[i]
         x2, y2 = nodes[i+1]
@@ -46,33 +43,26 @@ def build_multi_segment_mesh(segments, applied_w, sec_props, supports, struts):
         elements.append({
             'type': 'frame', 'sec': sec_props['name'],
             'n1': i, 'n2': i+1,
-            'px1': 0.0, 'py1': -applied_w, 'px2': 0.0, 'py2': -applied_w, # حمل منتظم رأسي
+            'px1': 0.0, 'py1': -applied_w, 'px2': 0.0, 'py2': -applied_w,
             'E': sec_props['E'] * 10000.0, 
             'A': sec_props['A'], 
             'I': sec_props['I'] / 100000000.0
         })
         
-    # 3. معالجة الدعامات والنهايز (Supports & Struts)
     supports_list = []
     supports_list.append({'node': 0, 'type': supports['start'], 'angle': 0.0})
     supports_list.append({'node': len(nodes)-1, 'type': supports['end'], 'angle': 0.0})
     
-    # إضافة النهايز كـ Truss Elements متصلة بالأرض
     for strut in struts:
         node_idx = strut['node_idx']
         strut_type = strut['sec']
-        st_props = STRUTS_DB.get(strut_type, {'allow': 50.0})
         
-        # إنشاء نقطة جديدة على الأرض تحت الـ Node مباشرة
         ground_x = nodes[node_idx][0]
         ground_y = 0.0
         nodes.append([ground_x, ground_y])
         ground_node_idx = len(nodes) - 1
         
-        # تثبيت النقطة على الأرض
         supports_list.append({'node': ground_node_idx, 'type': 'Hinged', 'angle': 0.0})
-        
-        # توصيل الناهز
         elements.append({
             'type': 'truss', 'sec': strut_type,
             'n1': ground_node_idx, 'n2': node_idx,
@@ -87,8 +77,7 @@ def build_curved_mesh(span, rise, num_segments, applied_w, sec_props, supports, 
     elements = []
     nodal_loads = []
     
-    # حساب نصف القطر ومركز الدائرة بناءً على الوتر والارتفاع
-    if rise <= 0: rise = 0.01 # حماية من القسمة على صفر
+    if rise <= 0: rise = 0.01 
     R = (span**2) / (8 * rise) + (rise / 2)
     xc = span / 2
     yc = rise - R
@@ -96,14 +85,12 @@ def build_curved_mesh(span, rise, num_segments, applied_w, sec_props, supports, 
     start_angle = np.arctan2(0 - yc, 0 - xc)
     end_angle = np.arctan2(0 - yc, span - xc)
     
-    # توليد نقط الكيرف (Discretization)
     angles = np.linspace(start_angle, end_angle, num_segments + 1)
     for ang in angles:
         nx = xc + R * np.cos(ang)
         ny = yc + R * np.sin(ang)
         nodes.append([nx, ny])
         
-    # توليد العناصر للكيرف
     for i in range(num_segments):
         elements.append({
             'type': 'frame', 'sec': sec_props['name'],
@@ -118,16 +105,13 @@ def build_curved_mesh(span, rise, num_segments, applied_w, sec_props, supports, 
     supports_list.append({'node': 0, 'type': supports['start'], 'angle': 0.0})
     supports_list.append({'node': num_segments, 'type': supports['end'], 'angle': 0.0})
     
-    # زرع النهايز (Struts) في أقرب نقطة للـ X المطلوبة
     for sx in struts_x_positions:
-        # البحث عن أقرب Node لإحداثي X المطلوب
         distances = [abs(nodes[i][0] - sx) for i in range(num_segments + 1)]
         closest_node = np.argmin(distances)
         
-        # إنشاء نقطة الدعم على الأرض
         ground_x = nodes[closest_node][0]
         ground_y = 0.0
-        if ground_y < nodes[closest_node][1] - 0.1: # التأكد إن الكيرف مرفوع عن الأرض
+        if ground_y < nodes[closest_node][1] - 0.1: 
             nodes.append([ground_x, ground_y])
             ground_node_idx = len(nodes) - 1
             supports_list.append({'node': ground_node_idx, 'type': 'Hinged', 'angle': 0.0})
@@ -317,6 +301,43 @@ def draw_base_geometry(ax, nodes, elements, supports_list):
             ax.add_patch(plt.Circle((x, y-0.38), 0.08, facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
             ax.plot([x-0.3, x+0.3], [y-0.46, y-0.46], color='limegreen', lw=1.5, zorder=4)
 
+def draw_live_preview(nodes, elements, supports_list, applied_w):
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.set_aspect('equal', adjustable='datalim')
+    ax.axis('off')
+    
+    draw_base_geometry(ax, nodes, elements, supports_list)
+
+    if applied_w > 0.1:
+        max_y = max([n[1] for n in nodes])
+        scale_h = 1.0
+        
+        for el in elements:
+            if el['type'] == 'frame':
+                n1, n2 = nodes[el['n1']], nodes[el['n2']]
+                x1, y1 = n1[0], n1[1]
+                x2, y2 = n2[0], n2[1]
+                h = scale_h
+                
+                poly = Polygon([(x1,y1), (x1, y1+h), (x2, y2+h), (x2, y2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2)
+                ax.add_patch(poly)
+                
+                dx, dy = x2-x1, y2-y1
+                num_arr = max(2, int(np.hypot(dx, dy) / 0.5))
+                for i in range(1, num_arr):
+                    fx, fy = x1 + dx*(i/num_arr), y1 + dy*(i/num_arr)
+                    ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
+        
+        mid_x = sum([n[0] for n in nodes])/len(nodes)
+        ax.text(mid_x, max_y + scale_h + 0.3, f"{applied_w:.2f} kN/m", color='blue', fontsize=9, fontweight='bold', ha='center',
+                bbox=dict(facecolor='white', edgecolor='blue', alpha=0.8, pad=0.5))
+
+    for i, n in enumerate(nodes):
+        if any(el['n1'] == i or el['n2'] == i for el in elements if el['type'] == 'frame'):
+            ax.text(n[0], n[1]+0.2, f"N{i}", color='firebrick', fontsize=7, ha='center', fontname='Arial')
+
+    return safe_render_fig(fig)
+
 def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
     mpl.rcParams['font.family'] = 'sans-serif'
     mpl.rcParams['font.sans-serif'] = ['Arial']
@@ -399,91 +420,100 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
 def render_advanced_shape_module():
     st.markdown("## 🎢 Advanced Shapes (Multi-Segment & Curved Plates)")
     
-    shape_mode = st.radio("Select Shape Type:", ["🔗 Multi-Segment (Polygonal)", "🌙 Curved Arch (2 Plates)"], horizontal=True)
+    c_in, c_plot = st.columns([1.3, 1])
     
-    st.markdown("### 1. Geometry & Section")
-    c1, c2, c3 = st.columns(3)
-    
-    if shape_mode == "🔗 Multi-Segment (Polygonal)":
-        num_segs = c1.number_input("Number of Segments", min_value=1, max_value=10, value=3)
-        sec_list = list(SECTIONS_DB.keys()) if SECTIONS_DB else ["Soldier U100"]
-        sec_name = c2.selectbox("Profile Section", sec_list)
-        sec_props = SECTIONS_DB.get(sec_name, {'name': sec_name, 'E': 2100.0, 'A': 0.00343, 'I': 412.0})
-        sec_props['name'] = sec_name
+    with c_in:
+        shape_mode = st.radio("Select Shape Type:", ["🔗 Multi-Segment (Polygonal)", "🌙 Curved Arch (2 Plates)"], horizontal=True)
         
-        st.markdown("**Segments Definition:**")
-        segments = []
-        for i in range(int(num_segs)):
-            sc1, sc2 = st.columns(2)
-            l_val = sc1.number_input(f"Length of Segment {i+1} (m)", value=2.0, step=0.5, key=f"l_{i}")
-            a_val = sc2.number_input(f"Angle of Segment {i+1} (°)", value=0.0 if i==0 else 45.0, step=5.0, key=f"a_{i}")
-            segments.append({'L': l_val, 'angle': a_val})
-            
-    else: # Curved Arch
-        span = c1.number_input("Arch Span / Chord (L) (m)", value=6.0, step=0.5)
-        rise = c2.number_input("Arch Rise (H) (m)", value=1.5, step=0.1)
-        st.info(f"💡 Calculated Radius = **{(span**2)/(8*rise) + rise/2:.2f} m**")
+        st.markdown("### 1. Geometry & Section")
+        # 💡 تم معالجة خيار الـ 2 Plates وجعله متاح للأنظمة المكسرة والدائرية
+        sec_source = st.radio("Section Type:", ["Standard Profile Database", "Custom 2 Plates Steel"], horizontal=True)
         
-        st.markdown("**Custom 2-Plates Section:**")
-        cp1, cp2 = st.columns(2)
-        p_height = cp1.number_input("Plates Depth / Height (mm)", value=300.0, step=10.0)
-        p_thick = cp2.number_input("Plate Thickness (mm)", value=10.0, step=1.0)
-        
-        # 💡 حسابات القطاع (2 Plates)
-        A_mm2 = 2 * (p_height * p_thick)
-        I_mm4 = 2 * (p_thick * (p_height**3) / 12.0)
-        
-        sec_props = {
-            'name': f"2 Plates ({int(p_height)}x{int(p_thick)}mm)",
-            'E': 2100.0, # Steel E in t/cm2
-            'A': A_mm2 / 1000000.0, # Convert to m2
-            'I': I_mm4 * 100.0 # Convert to cm4 for consistency with DB format
-        }
-        st.success(f"⚙️ Calculated Area = {A_mm2:.1f} mm² | Inertia (Ixx) = {I_mm4:.1f} mm⁴")
+        if sec_source == "Standard Profile Database":
+            sec_list = list(SECTIONS_DB.keys()) if SECTIONS_DB else ["Soldier U100"]
+            sec_name = st.selectbox("Profile Section", sec_list)
+            raw = SECTIONS_DB.get(sec_name, {})
+            # 💡 حماية وتوحيد قراءة الخصائص من قاعدة البيانات مهما كانت المسميات
+            s_E = raw.get('E', 2100.0)
+            s_A = raw.get('A', raw.get('A_cm2', 34.3) / 10000.0)
+            s_I = raw.get('I', raw.get('I_cm4', 412.0))
+            sec_props = {'name': sec_name, 'E': s_E, 'A': s_A, 'I': s_I}
+        else:
+            cp1, cp2 = st.columns(2)
+            p_height = cp1.number_input("Plates Depth / Height (mm)", value=300.0, step=10.0)
+            p_thick = cp2.number_input("Plate Thickness (mm)", value=10.0, step=1.0)
+            A_m2 = 2 * (p_height * p_thick) / 1000000.0
+            I_cm4 = 2 * (p_thick * (p_height**3) / 12.0) / 10000.0
+            sec_props = {
+                'name': f"2 Plates ({int(p_height)}x{int(p_thick)}mm)",
+                'E': 2100.0,
+                'A': A_m2,
+                'I': I_cm4 
+            }
+            st.success(f"⚙️ Area = {A_m2*1000000:.1f} mm² | Inertia (Ixx) = {I_cm4:.1f} cm⁴")
 
-    st.markdown("### 2. Loads & Supports")
-    cl1, cl2 = st.columns(2)
-    applied_w = cl1.number_input("Uniform Vertical Gravity Load (kN/m)", value=25.0, step=1.0)
-    
-    st.markdown("**Supports & Struts:**")
-    cs1, cs2 = st.columns(2)
-    sup_start = cs1.selectbox("Start Node Support", ["Hinged", "Roller", "Fixed"])
-    sup_end = cs2.selectbox("End Node Support", ["Roller", "Hinged", "Fixed"])
-    supports = {'start': sup_start, 'end': sup_end}
-    
-    strut_opts = list(STRUTS_DB.keys()) if STRUTS_DB else ["PPH 353"]
-    strut_sec = st.selectbox("Strut Type", strut_opts)
-    
-    struts_data = []
-    struts_x_pos = []
-    
+        segments = []
+        if shape_mode == "🔗 Multi-Segment (Polygonal)":
+            num_segs = st.number_input("Number of Segments", min_value=1, max_value=10, value=3)
+            st.markdown("**Segments Definition:**")
+            for i in range(int(num_segs)):
+                sc1, sc2 = st.columns(2)
+                l_val = sc1.number_input(f"Length of Segment {i+1} (m)", value=2.0, step=0.5, key=f"l_{i}")
+                a_val = sc2.number_input(f"Angle of Segment {i+1} (°)", value=0.0 if i==0 else 45.0, step=5.0, key=f"a_{i}")
+                segments.append({'L': l_val, 'angle': a_val})
+                
+        else: # Curved Arch
+            span = st.number_input("Arch Span / Chord (L) (m)", value=6.0, step=0.5)
+            rise = st.number_input("Arch Rise (H) (m)", value=1.5, step=0.1)
+            st.info(f"💡 Calculated Radius = **{(span**2)/(8*rise) + rise/2:.2f} m**")
+
+        st.markdown("### 2. Loads & Supports")
+        applied_w = st.number_input("Uniform Vertical Gravity Load (kN/m)", value=25.0, step=1.0)
+        
+        st.markdown("**Supports & Struts:**")
+        cs1, cs2 = st.columns(2)
+        sup_start = cs1.selectbox("Start Node Support", ["Hinged", "Roller", "Fixed"])
+        sup_end = cs2.selectbox("End Node Support", ["Roller", "Hinged", "Fixed"])
+        supports = {'start': sup_start, 'end': sup_end}
+        
+        strut_opts = list(STRUTS_DB.keys()) if STRUTS_DB else ["PPH 353"]
+        strut_sec = st.selectbox("Strut Type", strut_opts)
+        
+        struts_data = []
+        struts_x_pos = []
+        
+        if shape_mode == "🔗 Multi-Segment (Polygonal)":
+            st.write("Select Nodes to support with Struts to ground:")
+            num_nodes = int(num_segs) + 1
+            cols = st.columns(min(num_nodes, 8))
+            for i in range(1, num_nodes-1):
+                if cols[i%len(cols)].checkbox(f"Node {i}", value=True):
+                    struts_data.append({'node_idx': i, 'sec': strut_sec})
+        else:
+            st.write("Specify X-coordinates along the Span to place Struts:")
+            num_struts = st.number_input("Number of Struts", min_value=0, max_value=10, value=2)
+            scols = st.columns(4)
+            for i in range(int(num_struts)):
+                sx = scols[i%4].number_input(f"Strut {i+1} X (m)", value=(i+1)*span/(num_struts+1), step=0.5)
+                struts_x_pos.append(sx)
+
+    # 💡 توليد الـ Mesh قبل الـ Run عشان يترسم Live
     if shape_mode == "🔗 Multi-Segment (Polygonal)":
-        st.write("Select Nodes to support with Struts to ground:")
-        num_nodes = int(num_segs) + 1
-        cols = st.columns(min(num_nodes, 8))
-        for i in range(1, num_nodes-1): # Skip start and end nodes
-            if cols[i%len(cols)].checkbox(f"Node {i}", value=True):
-                struts_data.append({'node_idx': i, 'sec': strut_sec})
+        nodes, elements, nodal_loads, display_nodes, supports_list = build_multi_segment_mesh(segments, applied_w, sec_props, supports, struts_data)
     else:
-        st.write("Specify X-coordinates along the Span to place Struts:")
-        num_struts = st.number_input("Number of Struts", min_value=0, max_value=10, value=2)
-        scols = st.columns(4)
-        for i in range(int(num_struts)):
-            sx = scols[i%4].number_input(f"Strut {i+1} X (m)", value=(i+1)*span/(num_struts+1), step=0.5)
-            struts_x_pos.append(sx)
+        nodes, elements, nodal_loads, display_nodes, supports_list = build_curved_mesh(span, rise, 20, applied_w, sec_props, supports, struts_x_pos, strut_sec)
+
+    with c_plot:
+        st.markdown("<h4 style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px;'>Live Assigned Loads</h4>", unsafe_allow_html=True)
+        # 💡 استدعاء دالة الرسم Live
+        live_img = draw_live_preview(nodes, elements, supports_list, applied_w)
+        st.image(live_img, use_container_width=True)
 
     st.markdown("---")
     
     if st.button("🚀 Run Advanced Analysis", type="primary", use_container_width=True):
         with st.spinner("Generating Matrix & Solving..."):
-            
-            if shape_mode == "🔗 Multi-Segment (Polygonal)":
-                nodes, elements, nodal_loads, display_nodes, supports_list = build_multi_segment_mesh(segments, applied_w, sec_props, supports, struts_data)
-            else:
-                nodes, elements, nodal_loads, display_nodes, supports_list = build_curved_mesh(span, rise, 20, applied_w, sec_props, supports, struts_x_pos, strut_sec)
-                
             U, R = solve_fea_engine(nodes, elements, nodal_loads, supports_list)
-            
             st.success("✅ Analysis Complete!")
             
             st.markdown("### 🎛️ Diagram Scales")
@@ -501,6 +531,5 @@ def render_advanced_shape_module():
             c_p2.image(img_bufs['React'], caption="Support Reactions (kN)")
             st.image(img_bufs['D'], caption="Deflection Deformed Shape")
 
-# استدعاء الدالة عند استيراد الملف
 if __name__ == "__main__":
     render_advanced_shape_module()
