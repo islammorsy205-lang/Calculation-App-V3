@@ -65,14 +65,13 @@ def parse_bridge_html_native(html_content):
     return nodes, elements, tables
 
 # =========================================================
-# 2. SAP2000 Plotting Engine (With Max Fit & Open Arrows)
+# 2. SAP2000 Plotting Engine (Enhanced Aesthetics)
 # =========================================================
 def safe_render_fig(fig):
     try:
-        # 💡 إزالة الحواف البيضاء تماماً ورفع الجودة لـ 300 dpi لتناسب التكبير
         plt.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
         buf = io.BytesIO()
-        fig.savefig(buf, format='png', dpi=300, bbox_inches='tight', pad_inches=0.02, transparent=True)
+        fig.savefig(buf, format='png', dpi=300, bbox_inches='tight', pad_inches=0.01, transparent=True)
         return buf.getvalue()
     finally:
         plt.close(fig)
@@ -93,14 +92,14 @@ def draw_base_structure(ax, nodes, elements):
             if t == 'Hinged' or t == 'Fixed':
                 h, w = 0.5, 0.4
                 p1, p2, p3 = (x, y), (x + w/2, y - h), (x - w/2, y - h)
-                ax.add_patch(Polygon([p1, p2, p3], facecolor='none', edgecolor='limegreen', lw=1.5, zorder=5))
-                ax.plot([x - w, x + w], [y - h, y - h], color='limegreen', lw=2.0, zorder=4)
+                ax.add_patch(Polygon([p1, p2, p3], facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
+                ax.plot([x - w, x + w], [y - h, y - h], color='limegreen', lw=1.5, zorder=4)
             elif t == 'Roller':
                 h, w, r = 0.4, 0.3, 0.12
                 p1, p2, p3 = (x, y), (x + w/2, y - h), (x - w/2, y - h)
-                ax.add_patch(Polygon([p1, p2, p3], facecolor='none', edgecolor='limegreen', lw=1.5, zorder=5))
-                ax.add_patch(plt.Circle((x, y - h - r), r, facecolor='none', edgecolor='limegreen', lw=1.5, zorder=5))
-                ax.plot([x - 0.2, x + 0.2], [y - h - 2*r, y - h - 2*r], color='limegreen', lw=2.0, zorder=4)
+                ax.add_patch(Polygon([p1, p2, p3], facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
+                ax.add_patch(plt.Circle((x, y - h - r), r, facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
+                ax.plot([x - 0.2, x + 0.2], [y - h - 2*r, y - h - 2*r], color='limegreen', lw=1.5, zorder=4)
     return nodes_dict
 
 def draw_joint_labels(nodes, elements):
@@ -113,8 +112,8 @@ def draw_joint_labels(nodes, elements):
         x, y = float(n['x']), float(n['y'])
         ax.plot(x, y, 'ko', markersize=3, zorder=6)
         label = n.get('name', f"N{n['id']}")
-        ax.text(x, y + 0.15, label, fontsize=6, ha='center', va='bottom', zorder=7,
-                bbox=dict(facecolor='white', edgecolor='gray', alpha=0.9, pad=1.5))
+        ax.text(x, y + 0.15, label, fontsize=8, family='Arial', color='firebrick', ha='center', va='bottom', zorder=7,
+                bbox=dict(facecolor='white', edgecolor='red', alpha=0.9, pad=1.0))
     return safe_render_fig(fig)
 
 def draw_member_labels(nodes, elements):
@@ -129,8 +128,8 @@ def draw_member_labels(nodes, elements):
         x_mid = (float(n1['x']) + float(n2['x'])) / 2
         y_mid = (float(n1['y']) + float(n2['y'])) / 2
         label = el.get('name', f"E{el['id']}")
-        ax.text(x_mid, y_mid, label, fontsize=6, ha='center', va='center', color='darkblue', zorder=7,
-                bbox=dict(facecolor='white', edgecolor='lightblue', alpha=0.9, pad=1.5))
+        ax.text(x_mid, y_mid, label, fontsize=8, family='Arial', color='navy', ha='center', va='center', zorder=7,
+                bbox=dict(facecolor='white', edgecolor='blue', alpha=0.9, pad=1.0))
     return safe_render_fig(fig)
 
 def draw_sap2000_forces(val_key, nodes, elements, scale, is_axial=False):
@@ -179,7 +178,8 @@ def draw_sap2000_forces(val_key, nodes, elements, scale, is_axial=False):
             
         max_idx = np.argmax(np.abs(vals_orig))
         if abs(vals_orig[max_idx]) > 0.1:
-            ax.text(px_arr[max_idx] - s*0.4, py_arr[max_idx] + c*0.4, f"{abs(vals_orig[max_idx]):.1f}", color='black', fontsize=6, ha='center', va='center')
+            ax.text(px_arr[max_idx] - s*0.4, py_arr[max_idx] + c*0.4, f"{abs(vals_orig[max_idx]):.1f}", 
+                    color='black', fontsize=8, family='Arial', fontweight='normal', ha='center', va='center')
 
     return safe_render_fig(fig)
 
@@ -209,8 +209,8 @@ def draw_sap2000_deflection(nodes, elements, defl_scale):
             
     if max_pt and max_defl > 0.0001:
         ax.annotate(f"Max Defl: {max_defl*1000:.2f} mm", xy=max_pt, xytext=(max_pt[0]+1, max_pt[1]+1),
-                    arrowprops=dict(facecolor='red', shrink=0.05, width=1.5, headwidth=6),
-                    fontsize=8, color='red', fontweight='bold', zorder=10)
+                    arrowprops=dict(facecolor='red', shrink=0.05, width=1.0, headwidth=5),
+                    fontsize=9, family='Arial', color='red', fontweight='bold', zorder=10)
 
     return safe_render_fig(fig)
 
@@ -220,7 +220,6 @@ def draw_sap2000_reactions(nodes, elements):
     ax.axis('off')
     draw_base_structure(ax, nodes, elements)
     
-    # 💡 تم تغيير شكل الأسهم لمثلث مفتوح بدون تهشير باللونين الأزرق والأحمر
     for n in nodes:
         rx, ry = float(n.get('rx', 0)), float(n.get('ry', 0))
         x, y = float(n['x']), float(n['y'])
@@ -231,32 +230,20 @@ def draw_sap2000_reactions(nodes, elements):
             sign = 1 if ry > 0 else -1
             y_start = y - arr_len * sign
             y_end = y
-            
-            # رسم العصا
-            ax.plot([x, x], [y_start, y_end], color=color, lw=1.8, zorder=6)
-            
-            # رسم رأس السهم المفتوح (مثلث ضلعين)
+            ax.plot([x, x], [y_start, y_end], color=color, lw=1.0, zorder=6)
             hw, hl = 0.25, 0.35
-            ax.plot([x - hw, x, x + hw], [y_end - sign*hl, y_end, y_end - sign*hl], color=color, lw=1.8, zorder=6)
-            
-            # كتابة القيمة
-            ax.text(x, y_start - sign*0.25, f"{abs(ry):.1f}", color='black', fontsize=7, fontweight='bold', ha='center', va='center')
+            ax.plot([x - hw, x, x + hw], [y_end - sign*hl, y_end, y_end - sign*hl], color=color, lw=1.0, zorder=6)
+            ax.text(x, y_start - sign*0.25, f"{abs(ry):.1f}", color='black', fontsize=9, family='Arial', fontweight='normal', ha='center', va='center')
             
         if abs(rx) > 0.1:
             color = 'blue' if rx > 0 else 'red'
             sign = 1 if rx > 0 else -1
             x_start = x - arr_len * sign
             x_end = x
-            
-            # رسم العصا
-            ax.plot([x_start, x_end], [y, y], color=color, lw=1.8, zorder=6)
-            
-            # رسم رأس السهم المفتوح
+            ax.plot([x_start, x_end], [y, y], color=color, lw=1.0, zorder=6)
             hw, hl = 0.25, 0.35
-            ax.plot([x_end - sign*hl, x_end, x_end - sign*hl], [y - hw, y, y + hw], color=color, lw=1.8, zorder=6)
-            
-            # كتابة القيمة
-            ax.text(x_start - sign*0.25, y, f"{abs(rx):.1f}", color='black', fontsize=7, fontweight='bold', ha='center', va='center')
+            ax.plot([x_end - sign*hl, x_end, x_end - sign*hl], [y - hw, y, y + hw], color=color, lw=1.0, zorder=6)
+            ax.text(x_start - sign*0.25, y, f"{abs(rx):.1f}", color='black', fontsize=9, family='Arial', fontweight='normal', ha='center', va='center')
 
     return safe_render_fig(fig)
 
@@ -282,7 +269,7 @@ def draw_sap2000_loads(nodes, elements):
         for i in range(1, num_arr):
             fx, fy = x1 + (x2-x1) * (i/num_arr), y1 + (y2-y1) * (i/num_arr)
             ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
-        ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f} kN/m", color='blue', fontsize=6, fontweight='bold', ha='center',
+        ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f} kN/m", color='blue', fontsize=8, family='Arial', fontweight='normal', ha='center',
                 bbox=dict(facecolor='white', edgecolor='blue', alpha=0.8, pad=0.5))
 
     return safe_render_fig(fig)
@@ -294,7 +281,7 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
     
     if os.path.exists("Acrow_Template.docx"):
         doc = Document("Acrow_Template.docx")
-        doc.add_page_break()
+        # 💡 تم حذف الإيرور (add_page_break) الذي كان يسبب الصفحة الفارغة!
     else:
         doc = Document()
         
@@ -357,7 +344,6 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
                                     run.font.bold = True
         doc.add_paragraph()
 
-    # --- Cover Page Replacements ---
     def remove_hardcoded_prefix(p):
         if p.text and "CALCULATION SHEET FOR" in p.text.upper():
             clean_text = re.sub(r'(?i)CALCULATION SHEET FOR\s*', '', p.text)
@@ -403,9 +389,8 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
                             for r in p.runs: r.text = r.text.replace(k, str(v))
                             if k in p.text: p.text = p.text.replace(k, str(v))
                                 
-    doc.add_page_break()
-    
-    # --- Headers and Footers ---
+    # 💡 تم إزالة doc.add_page_break() هنا أيضاً لمنع الصفحة الفارغة الثانية
+
     for sec in doc.sections:
         for hf in [sec.header, sec.first_page_header, sec.footer, sec.first_page_footer]:
             if hf:
@@ -419,7 +404,6 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
                                         if k in p.text: p.text = p.text.replace(k, str(v))
                                         for r in p.runs: r.font._element.set(qn('w:ascii'), 'Arial')
     
-    # --- Regulations & Standards ---
     insert_blue_banner(doc, "REGULATIONS AND STANDARDS", font_size=16)
     doc.add_paragraph()
     ref_code = proj_info.get('ref_code', 'BS')
@@ -435,27 +419,25 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         add_eq(doc, "3- WISA®-FORM PLYWOOD.")
         add_eq(doc, "4- THE SAUDI BUILDING CODE (SBC) 2018")
     
-    # --- Data Sheets ---
     data_sheets = proj_info.get('data_sheets', [])
     if data_sheets:
         doc.add_page_break()
         insert_blue_banner(doc, "FORMWORK MATERIALS TECHNICAL DATA", font_size=14)
         for f in data_sheets:
             if os.path.exists(f): 
-                append_pdf_stream_to_word(f, doc, is_path=True, max_width_cm=17.5, max_height_cm=24.0, add_border=True, reduce_first_page=True)
+                # 💡 تعديل أبعاد الـ PDF ليأخذ أقصى مساحة ممكنة في الصفحة
+                append_pdf_stream_to_word(f, doc, is_path=True, max_width_cm=19.0, max_height_cm=26.0, add_border=True, reduce_first_page=True)
     
-    # --- Design Loads ---
     design_pdf = "Design_Loads_BS.pdf" if "BS" in ref_code and os.path.exists("Design_Loads_BS.pdf") else ("Design_Loads_ACI.pdf" if "ACI" in ref_code and os.path.exists("Design_Loads_ACI.pdf") else None)
     if design_pdf: 
         doc.add_page_break()
-        insert_blue_banner(doc, "DESIGN LOADS FOR SLAB", font_size=14)
-        append_pdf_stream_to_word(design_pdf, doc, is_path=True, max_width_cm=17.5, max_height_cm=24.0, add_border=True, reduce_first_page=True)
+        # 💡 تغيير العنوان ليتوافق مع الكباري
+        insert_blue_banner(doc, "DESIGN LOADS FOR BRIDGE", font_size=14)
+        append_pdf_stream_to_word(design_pdf, doc, is_path=True, max_width_cm=19.0, max_height_cm=26.0, add_border=True, reduce_first_page=True)
         
-    # --- Formwork Sketches Banner ---
     doc.add_page_break()
     insert_blue_banner(doc, "FORMWORK SKETCHES", font_size=16)
 
-    # --- Extracted Bridge Content ---
     doc.add_page_break()
     add_line("BRIDGE FORMWORK DESIGN DATA (EXTRACTED)", bold=True, size=14)
     doc.add_paragraph()
@@ -503,8 +485,8 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         
         p_img = doc.add_paragraph()
         p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        # 💡 زيادة العرض لـ 17.5 سم لضمان أقصى عرض (Fit) في الوورد
-        p_img.add_run().add_picture(io.BytesIO(img_bytes), width=Cm(17.5))
+        # 💡 زيادة عرض الرسمة لتملأ الصفحة
+        p_img.add_run().add_picture(io.BytesIO(img_bytes), width=Cm(18.5))
         doc.add_paragraph()
 
     out = io.BytesIO()
