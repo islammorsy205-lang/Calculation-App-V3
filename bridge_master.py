@@ -17,6 +17,9 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+# 💡 تم إضافة سطر الاستدعاء الخاص بدوال بناء الوورد
+from report_builder import insert_blue_banner, add_eq, append_pdf_stream_to_word
+
 # =========================================================
 # 1. Native HTML Parser Engine (Extracting EVERYTHING Safely)
 # =========================================================
@@ -202,11 +205,11 @@ def draw_sap2000_reactions(nodes, elements):
         if abs(ry) > 0.1:
             dy = -arr_len if ry > 0 else arr_len
             ax.arrow(x, y + dy, 0, -dy*0.8, head_width=0.3, head_length=0.4, fc='darkorange', ec='darkorange', lw=1.5, zorder=6)
-            ax.text(x, y + dy - np.sign(dy)*0.3, f"{abs(ry):.1f}", color='black', fontsize=7, fontweight='bold', ha='center')
+            ax.text(x, y + dy - np.sign(dy)*0.3, f"{abs(ry):.1f} kN", color='black', fontsize=7, fontweight='bold', ha='center')
         if abs(rx) > 0.1:
             dx = -arr_len if rx > 0 else arr_len
             ax.arrow(x + dx, y, -dx*0.8, 0, head_width=0.3, head_length=0.4, fc='darkorange', ec='darkorange', lw=1.5, zorder=6)
-            ax.text(x + dx - np.sign(dx)*0.3, y, f"{abs(rx):.1f}", color='black', fontsize=7, fontweight='bold', va='center')
+            ax.text(x + dx - np.sign(dx)*0.3, y, f"{abs(rx):.1f} kN", color='black', fontsize=7, fontweight='bold', va='center')
 
     return safe_render_fig(fig)
 
@@ -232,7 +235,7 @@ def draw_sap2000_loads(nodes, elements):
         for i in range(1, num_arr):
             fx, fy = x1 + (x2-x1) * (i/num_arr), y1 + (y2-y1) * (i/num_arr)
             ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
-        ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f}", color='blue', fontsize=7, fontweight='bold', ha='center')
+        ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f} kN/m", color='blue', fontsize=7, fontweight='bold', ha='center')
 
     return safe_render_fig(fig)
 
@@ -273,14 +276,14 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         cols_count = len(table_data[0])
         table = doc.add_table(rows=len(table_data), cols=cols_count)
         
-        # 💡 الحل الجذري هنا لتخطي خطأ הستايل
+        # 💡 حماية إضافية للستايل الافتراضي للجدول
         try:
             table.style = 'Table Grid'
         except Exception:
             try:
                 table.style = 'TableGrid'
             except Exception:
-                pass # تجاهل الستايل واستخدام الافتراضي
+                pass 
         
         for r_idx, row_data in enumerate(table_data):
             row_cells = table.rows[r_idx].cells
@@ -514,7 +517,7 @@ def render_bridge_module(proj_info):
                 if st.button("🚀 Process & Generate Calculation Sheet", type="primary", use_container_width=True):
                     with st.spinner("Building Comprehensive Word Document..."):
                         try:
-                            # 💡 نمرر هنا بيانات المشروع (proj_info) لبناء النوتة الكاملة
+                            # 💡 نمرر هنا بيانات المشروع لبناء النوتة الكاملة
                             docx_out = generate_comprehensive_bridge_report(nodes, elements, tables, img_bufs, proj_info)
                             st.session_state['bridge_docx_bytes'] = docx_out.getvalue()
                             st.success("✅ Document Ready! You can download it below.")
