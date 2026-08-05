@@ -65,7 +65,7 @@ def parse_bridge_html_native(html_content):
     return nodes, elements, tables
 
 # =========================================================
-# 2. SAP2000 Plotting Engine (Enhanced Aesthetics)
+# 2. SAP2000 Plotting Engine (Enhanced Aesthetics & Decluttering)
 # =========================================================
 def safe_render_fig(fig):
     try:
@@ -112,7 +112,7 @@ def draw_joint_labels(nodes, elements):
         x, y = float(n['x']), float(n['y'])
         ax.plot(x, y, 'ko', markersize=3, zorder=6)
         label = n.get('name', f"N{n['id']}")
-        ax.text(x, y + 0.15, label, fontsize=8, family='Arial', color='firebrick', ha='center', va='bottom', zorder=7,
+        ax.text(x, y + 0.15, label, fontsize=6, family='Arial', color='firebrick', ha='center', va='bottom', zorder=7,
                 bbox=dict(facecolor='white', edgecolor='red', alpha=0.9, pad=1.0))
     return safe_render_fig(fig)
 
@@ -128,7 +128,7 @@ def draw_member_labels(nodes, elements):
         x_mid = (float(n1['x']) + float(n2['x'])) / 2
         y_mid = (float(n1['y']) + float(n2['y'])) / 2
         label = el.get('name', f"E{el['id']}")
-        ax.text(x_mid, y_mid, label, fontsize=8, family='Arial', color='navy', ha='center', va='center', zorder=7,
+        ax.text(x_mid, y_mid, label, fontsize=6, family='Arial', color='navy', ha='center', va='center', zorder=7,
                 bbox=dict(facecolor='white', edgecolor='blue', alpha=0.9, pad=1.0))
     return safe_render_fig(fig)
 
@@ -137,6 +137,14 @@ def draw_sap2000_forces(val_key, nodes, elements, scale, is_axial=False):
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
     nodes_dict = draw_base_structure(ax, nodes, elements)
+
+    global_max = 0.0
+    for el in elements:
+        diag_arr = el.get('axialDiag' if is_axial else 'diag', [])
+        if diag_arr:
+            vals = np.array([float(pt.get('n' if is_axial else val_key.lower(), 0)) for pt in diag_arr])
+            if len(vals) > 0:
+                global_max = max(global_max, np.max(np.abs(vals)))
 
     for el in elements:
         n1, n2 = nodes_dict.get(el['i']), nodes_dict.get(el['j'])
@@ -177,9 +185,12 @@ def draw_sap2000_forces(val_key, nodes, elements, scale, is_axial=False):
             ax.plot([lx, lx - s * lv * scale], [ly, ly + c * lv * scale], color=color_pos if vals_orig[idx_val] >= 0 else color_neg, linewidth=0.3, alpha=0.6)
             
         max_idx = np.argmax(np.abs(vals_orig))
-        if abs(vals_orig[max_idx]) > 0.1:
-            ax.text(px_arr[max_idx] - s*0.4, py_arr[max_idx] + c*0.4, f"{abs(vals_orig[max_idx]):.1f}", 
-                    color='black', fontsize=8, family='Arial', fontweight='normal', ha='center', va='center')
+        max_val_abs = abs(vals_orig[max_idx])
+        
+        if max_val_abs > 0.1:
+            if L_s > 0.4 or max_val_abs >= global_max * 0.95:
+                ax.text(px_arr[max_idx] - s*0.3, py_arr[max_idx] + c*0.3, f"{max_val_abs:.1f}", 
+                        color='black', fontsize=7, family='Arial', fontweight='normal', ha='center', va='center')
 
     return safe_render_fig(fig)
 
@@ -210,7 +221,7 @@ def draw_sap2000_deflection(nodes, elements, defl_scale):
     if max_pt and max_defl > 0.0001:
         ax.annotate(f"Max Defl: {max_defl*1000:.2f} mm", xy=max_pt, xytext=(max_pt[0]+1, max_pt[1]+1),
                     arrowprops=dict(facecolor='red', shrink=0.05, width=1.0, headwidth=5),
-                    fontsize=9, family='Arial', color='red', fontweight='bold', zorder=10)
+                    fontsize=8, family='Arial', color='red', fontweight='bold', zorder=10)
 
     return safe_render_fig(fig)
 
@@ -223,7 +234,7 @@ def draw_sap2000_reactions(nodes, elements):
     for n in nodes:
         rx, ry = float(n.get('rx', 0)), float(n.get('ry', 0))
         x, y = float(n['x']), float(n['y'])
-        arr_len = 1.5
+        arr_len = 0.8
         
         if abs(ry) > 0.1:
             color = 'blue' if ry > 0 else 'red'
@@ -231,9 +242,9 @@ def draw_sap2000_reactions(nodes, elements):
             y_start = y - arr_len * sign
             y_end = y
             ax.plot([x, x], [y_start, y_end], color=color, lw=1.0, zorder=6)
-            hw, hl = 0.25, 0.35
+            hw, hl = 0.15, 0.2
             ax.plot([x - hw, x, x + hw], [y_end - sign*hl, y_end, y_end - sign*hl], color=color, lw=1.0, zorder=6)
-            ax.text(x, y_start - sign*0.25, f"{abs(ry):.1f}", color='black', fontsize=9, family='Arial', fontweight='normal', ha='center', va='center')
+            ax.text(x, y_start - sign*0.2, f"{abs(ry):.1f}", color='black', fontsize=8, family='Arial', fontweight='normal', ha='center', va='center')
             
         if abs(rx) > 0.1:
             color = 'blue' if rx > 0 else 'red'
@@ -241,9 +252,9 @@ def draw_sap2000_reactions(nodes, elements):
             x_start = x - arr_len * sign
             x_end = x
             ax.plot([x_start, x_end], [y, y], color=color, lw=1.0, zorder=6)
-            hw, hl = 0.25, 0.35
+            hw, hl = 0.15, 0.2
             ax.plot([x_end - sign*hl, x_end, x_end - sign*hl], [y - hw, y, y + hw], color=color, lw=1.0, zorder=6)
-            ax.text(x_start - sign*0.25, y, f"{abs(rx):.1f}", color='black', fontsize=9, family='Arial', fontweight='normal', ha='center', va='center')
+            ax.text(x_start - sign*0.2, y, f"{abs(rx):.1f}", color='black', fontsize=8, family='Arial', fontweight='normal', ha='center', va='center')
 
     return safe_render_fig(fig)
 
@@ -263,25 +274,28 @@ def draw_sap2000_loads(nodes, elements):
         x1, y1 = float(n1['x']), float(n1['y'])
         x2, y2 = float(n2['x']), float(n2['y'])
         h = abs(w) * scale_h
+        dx, dy = x2 - x1, y2 - y1
+        L_s = np.hypot(dx, dy)
         
         ax.add_patch(Polygon([(x1,y1), (x1, y1+h), (x2, y2+h), (x2, y2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2))
         num_arr = max(1, int(np.hypot(x2-x1, y2-y1) / 0.5))
         for i in range(1, num_arr):
             fx, fy = x1 + (x2-x1) * (i/num_arr), y1 + (y2-y1) * (i/num_arr)
             ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
-        ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f} kN/m", color='blue', fontsize=8, family='Arial', fontweight='normal', ha='center',
-                bbox=dict(facecolor='white', edgecolor='blue', alpha=0.8, pad=0.5))
+            
+        if L_s > 0.4:
+            ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f} kN/m", color='blue', fontsize=7, family='Arial', fontweight='normal', ha='center',
+                    bbox=dict(facecolor='white', edgecolor='none', alpha=0.7, pad=0.1))
 
     return safe_render_fig(fig)
 
 # =========================================================
-# 3. Comprehensive Report Generator (Word Flow)
+# 3. Comprehensive Report Generator (Multi-Table Flow)
 # =========================================================
-def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict, proj_info):
+def generate_comprehensive_bridge_report(bridge_data_list, proj_info):
     
     if os.path.exists("Acrow_Template.docx"):
         doc = Document("Acrow_Template.docx")
-        # 💡 تم حذف الإيرور (add_page_break) الذي كان يسبب الصفحة الفارغة!
     else:
         doc = Document()
         
@@ -389,8 +403,6 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
                             for r in p.runs: r.text = r.text.replace(k, str(v))
                             if k in p.text: p.text = p.text.replace(k, str(v))
                                 
-    # 💡 تم إزالة doc.add_page_break() هنا أيضاً لمنع الصفحة الفارغة الثانية
-
     for sec in doc.sections:
         for hf in [sec.header, sec.first_page_header, sec.footer, sec.first_page_footer]:
             if hf:
@@ -425,69 +437,69 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         insert_blue_banner(doc, "FORMWORK MATERIALS TECHNICAL DATA", font_size=14)
         for f in data_sheets:
             if os.path.exists(f): 
-                # 💡 تعديل أبعاد الـ PDF ليأخذ أقصى مساحة ممكنة في الصفحة
                 append_pdf_stream_to_word(f, doc, is_path=True, max_width_cm=19.0, max_height_cm=26.0, add_border=True, reduce_first_page=True)
     
     design_pdf = "Design_Loads_BS.pdf" if "BS" in ref_code and os.path.exists("Design_Loads_BS.pdf") else ("Design_Loads_ACI.pdf" if "ACI" in ref_code and os.path.exists("Design_Loads_ACI.pdf") else None)
     if design_pdf: 
         doc.add_page_break()
-        # 💡 تغيير العنوان ليتوافق مع الكباري
         insert_blue_banner(doc, "DESIGN LOADS FOR BRIDGE", font_size=14)
         append_pdf_stream_to_word(design_pdf, doc, is_path=True, max_width_cm=19.0, max_height_cm=26.0, add_border=True, reduce_first_page=True)
         
     doc.add_page_break()
     insert_blue_banner(doc, "FORMWORK SKETCHES", font_size=16)
 
-    doc.add_page_break()
-    add_line("BRIDGE FORMWORK DESIGN DATA (EXTRACTED)", bold=True, size=14)
-    doc.add_paragraph()
-    
-    table_titles = [
-        "Nodal Displacements", "Element Internal Forces Summary", "BMD Extreme Values",
-        "SFD Extreme Values", "Axial Force (Main Members)", "Axial Force (Bracing)",
-        "Deflection Check", "Support Reactions Summary", "Applied Loads"
-    ]
-    
-    for i, table_data in enumerate(tables):
-        if not table_data or len(table_data) < 2: continue
-        title = table_titles[i] if i < len(table_titles) else f"Data Table {i+1}"
-        add_native_table_to_word(doc, table_data, f"Table {i+1}: {title}")
-
-    doc.add_page_break()
-    
-    def add_red_underlined_header(text):
-        p = doc.add_paragraph()
-        force_ltr_left(p)
-        r = p.add_run(text)
-        r.font.name = 'Arial'
-        r.font.size = Pt(12)
-        r.font.bold = True
-        r.font.underline = True
-        r.font.color.rgb = RGBColor(255, 0, 0)
-        return p
-
-    diagram_order = [
-        ('JL', "JOINT LABELS DIAGRAM:"),
-        ('ML', "MEMBER LABELS DIAGRAM:"),
-        ('L',  "GLOBAL APPLIED LOADS & SUPPORTS DIAGRAM (KN/m'):"),
-        ('M',  "BENDING MOMENT DIAGRAM DUE TO (DL+LL) (KN.m):"),
-        ('N',  "NORMAL FORCE DIAGRAM DUE TO (DL+LL) (KN):"),
-        ('V',  "SHEAR FORCE DIAGRAM DUE TO (DL+LL) (KN):"),
-        ('D',  "DEFLECTION SHAPE DIAGRAM (mm):"),
-        ('R',  "SHOREBRACE REACTIONS:")
-    ]
-    
-    for key, title in diagram_order:
-        img_bytes = img_bytes_dict.get(key)
-        if not img_bytes: continue
-        
-        add_red_underlined_header(title)
-        
-        p_img = doc.add_paragraph()
-        p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        # 💡 زيادة عرض الرسمة لتملأ الصفحة
-        p_img.add_run().add_picture(io.BytesIO(img_bytes), width=Cm(18.5))
+    # 💡 الميزة الجديدة: Loop لإنشاء تقرير لكل جدول تم رفعه
+    for b_data in bridge_data_list:
+        doc.add_page_break()
+        # 💡 تغيير العنوان حسب طلبك (T1, T2, ...)
+        add_line(f"BRIDGE FORMWORK DESIGN DATA FOR TABLE ({b_data['title']})", bold=True, size=14)
         doc.add_paragraph()
+        
+        table_titles = [
+            "Nodal Displacements", "Element Internal Forces Summary", "BMD Extreme Values",
+            "SFD Extreme Values", "Axial Force (Main Members)", "Axial Force (Bracing)",
+            "Deflection Check", "Support Reactions Summary", "Applied Loads"
+        ]
+        
+        for i, table_data in enumerate(b_data['tables']):
+            if not table_data or len(table_data) < 2: continue
+            title = table_titles[i] if i < len(table_titles) else f"Data Table {i+1}"
+            add_native_table_to_word(doc, table_data, f"Table {i+1}: {title}")
+
+        doc.add_page_break()
+        
+        def add_red_underlined_header(text):
+            p = doc.add_paragraph()
+            force_ltr_left(p)
+            r = p.add_run(text)
+            r.font.name = 'Arial'
+            r.font.size = Pt(12)
+            r.font.bold = True
+            r.font.underline = True
+            r.font.color.rgb = RGBColor(255, 0, 0)
+            return p
+
+        diagram_order = [
+            ('JL', "JOINT LABELS DIAGRAM:"),
+            ('ML', "MEMBER LABELS DIAGRAM:"),
+            ('L',  "GLOBAL APPLIED LOADS & SUPPORTS DIAGRAM (KN/m'):"),
+            ('M',  "BENDING MOMENT DIAGRAM DUE TO (DL+LL) (KN.m):"),
+            ('N',  "NORMAL FORCE DIAGRAM DUE TO (DL+LL) (KN):"),
+            ('V',  "SHEAR FORCE DIAGRAM DUE TO (DL+LL) (KN):"),
+            ('D',  "DEFLECTION SHAPE DIAGRAM (mm):"),
+            ('R',  "SHOREBRACE REACTIONS:")
+        ]
+        
+        for key, title in diagram_order:
+            img_bytes = b_data['img_bufs'].get(key)
+            if not img_bytes: continue
+            
+            add_red_underlined_header(title)
+            
+            p_img = doc.add_paragraph()
+            p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            p_img.add_run().add_picture(io.BytesIO(img_bytes), width=Cm(18.5))
+            doc.add_paragraph()
 
     out = io.BytesIO()
     doc.save(out)
@@ -500,75 +512,78 @@ def render_bridge_module(proj_info):
     st.markdown("## 🌉 Bridge Formwork & Structures (Advanced FEA Extractor)")
     st.info("💡 **Smart Extractor:** Upload your Acrow Bridge HTML Report to extract all calculations, safety checks, and diagrams. Convert them instantly to SAP2000 style and generate a complete Word calculation sheet.")
     
-    uploaded_file = st.file_uploader("📂 Upload Acrow Bridge FEA HTML File", type=["html"])
+    # 💡 تم تفعيل خاصية رفع أكثر من ملف في نفس الوقت
+    uploaded_files = st.file_uploader("📂 Upload Acrow Bridge FEA HTML Files (You can upload multiple tables T1, T2...)", type=["html"], accept_multiple_files=True)
     
-    if uploaded_file is not None:
-        html_content = uploaded_file.getvalue().decode("utf-8")
+    if uploaded_files:
+        st.markdown("### 🎛️ Customize Global Diagram Scales")
+        c_s1, c_s2, c_s3, c_s4 = st.columns(4)
+        sc_n = c_s1.slider("Axial Scale", 0.001, 0.050, 0.015, step=0.001)
+        sc_v = c_s2.slider("Shear Scale", 0.001, 0.050, 0.015, step=0.001)
+        sc_m = c_s3.slider("Moment Scale", 0.001, 0.100, 0.015, step=0.001)
+        sc_d = c_s4.slider("Deflection Scale", 1.0, 100.0, 20.0, step=1.0)
         
-        with st.spinner("Extracting Nodes, Elements, and Checking Tables safely..."):
-            nodes, elements, tables = parse_bridge_html_native(html_content)
+        all_bridge_data = []
+        
+        # 💡 حلقة تكرارية للتعامل مع كل ملف أترفع على إنه Table منفصل (T1, T2, etc.)
+        for i, file in enumerate(uploaded_files):
+            table_name = f"T{i+1}"
             
-        if nodes and elements:
-            st.success(f"✅ Data Extracted Successfully! Found **{len(nodes)} Nodes**, **{len(elements)} Elements**, and **{len(tables)} Analysis Tables**.")
-            st.markdown("---")
-            
-            diag_placeholder = st.empty()
-            
-            st.markdown("### 🎛️ Customize Diagram Scales")
-            c_s1, c_s2, c_s3, c_s4 = st.columns(4)
-            sc_n = c_s1.slider("Axial Scale", 0.001, 0.050, 0.015, step=0.001)
-            sc_v = c_s2.slider("Shear Scale", 0.001, 0.050, 0.015, step=0.001)
-            sc_m = c_s3.slider("Moment Scale", 0.001, 0.100, 0.015, step=0.001)
-            sc_d = c_s4.slider("Deflection Scale", 1.0, 100.0, 20.0, step=1.0)
-            
-            img_bufs = {}
-            with diag_placeholder.container():
-                st.markdown("### 🎛️ Live SAP2000-Style Diagrams")
-                try:
-                    img_bufs = {
-                        'JL': draw_joint_labels(nodes, elements),
-                        'ML': draw_member_labels(nodes, elements),
-                        'L': draw_sap2000_loads(nodes, elements),
-                        'N': draw_sap2000_forces('N', nodes, elements, sc_n, is_axial=True),
-                        'V': draw_sap2000_forces('V', nodes, elements, sc_v),
-                        'M': draw_sap2000_forces('M', nodes, elements, sc_m),
-                        'D': draw_sap2000_deflection(nodes, elements, sc_d),
-                        'R': draw_sap2000_reactions(nodes, elements)
-                    }
-                    
-                    st.image(img_bufs['L'], caption="Applied Loads Diagram")
-                    c_p1, c_p2 = st.columns(2)
-                    c_p1.image(img_bufs['M'], caption="Bending Moment Diagram (kN.m)")
-                    c_p2.image(img_bufs['V'], caption="Shear Force Diagram (kN)")
-                    c_p3, c_p4 = st.columns(2)
-                    c_p3.image(img_bufs['N'], caption="Axial Force Diagram (kN)")
-                    c_p4.image(img_bufs['D'], caption="Deflection Deformed Shape")
-                    
-                    c_p5, c_p6 = st.columns(2)
-                    c_p5.image(img_bufs['JL'], caption="Joint Labels")
-                    c_p6.image(img_bufs['ML'], caption="Member Labels")
-                    
-                    st.image(img_bufs['R'], caption="Support Reactions Diagram")
-                except Exception as e:
-                    st.error(f"❌ حدث خطأ أثناء الرسم: {e}")
+            with st.expander(f"⚙️ Processing Data for Table {table_name} ({file.name})", expanded=False):
+                html_content = file.getvalue().decode("utf-8")
                 
-            st.markdown("---")
-            
-            if img_bufs:
-                if st.button("🚀 Process & Generate Calculation Sheet", type="primary", use_container_width=True):
-                    with st.spinner("Building Comprehensive Word Document..."):
-                        try:
-                            docx_out = generate_comprehensive_bridge_report(nodes, elements, tables, img_bufs, proj_info)
-                            st.session_state['bridge_docx_bytes'] = docx_out.getvalue()
-                            st.success("✅ Document Ready! You can download it below.")
-                        except Exception as e:
-                            st.error(f"⚠️ خطأ أثناء تجميع ملف الوورد: {e}")
+                nodes, elements, tables = parse_bridge_html_native(html_content)
                 
-                if 'bridge_docx_bytes' in st.session_state:
-                    st.download_button(
-                        "⬇️ Download Full Bridge Calculation Sheet (Word)", 
-                        data=st.session_state['bridge_docx_bytes'], 
-                        file_name="Acrow_Bridge_Full_Report.docx", 
-                        mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-                        use_container_width=True
-                    )
+                if nodes and elements:
+                    st.success(f"✅ Extracted **{len(nodes)} Nodes**, **{len(elements)} Elements**, and **{len(tables)} Tables**.")
+                    
+                    img_bufs = {}
+                    try:
+                        img_bufs = {
+                            'JL': draw_joint_labels(nodes, elements),
+                            'ML': draw_member_labels(nodes, elements),
+                            'L': draw_sap2000_loads(nodes, elements),
+                            'N': draw_sap2000_forces('N', nodes, elements, sc_n, is_axial=True),
+                            'V': draw_sap2000_forces('V', nodes, elements, sc_v),
+                            'M': draw_sap2000_forces('M', nodes, elements, sc_m),
+                            'D': draw_sap2000_deflection(nodes, elements, sc_d),
+                            'R': draw_sap2000_reactions(nodes, elements)
+                        }
+                        
+                        st.image(img_bufs['L'], caption=f"{table_name} - Applied Loads")
+                        c_p1, c_p2 = st.columns(2)
+                        c_p1.image(img_bufs['M'], caption="Bending Moment")
+                        c_p2.image(img_bufs['V'], caption="Shear Force")
+                    except Exception as e:
+                        st.error(f"❌ حدث خطأ أثناء رسم {table_name}: {e}")
+                    
+                    # 💡 تخزين بيانات كل تربيزة في القائمة الرئيسية
+                    all_bridge_data.append({
+                        'title': table_name,
+                        'nodes': nodes,
+                        'elements': elements,
+                        'tables': tables,
+                        'img_bufs': img_bufs
+                    })
+                
+        st.markdown("---")
+        
+        if all_bridge_data:
+            if st.button("🚀 Process & Generate Full Calculation Sheet", type="primary", use_container_width=True):
+                with st.spinner("Building Comprehensive Word Document for all tables..."):
+                    try:
+                        # 💡 إرسال القائمة الكاملة اللي فيها كل الكباري لتوليد نوتة مجمعة
+                        docx_out = generate_comprehensive_bridge_report(all_bridge_data, proj_info)
+                        st.session_state['bridge_docx_bytes'] = docx_out.getvalue()
+                        st.success("✅ Document Ready! All tables included successfully.")
+                    except Exception as e:
+                        st.error(f"⚠️ خطأ أثناء تجميع ملف الوورد: {e}")
+            
+            if 'bridge_docx_bytes' in st.session_state:
+                st.download_button(
+                    "⬇️ Download Full Multi-Table Calculation Sheet (Word)", 
+                    data=st.session_state['bridge_docx_bytes'], 
+                    file_name="Acrow_Bridge_Full_Report.docx", 
+                    mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                    use_container_width=True
+                )
