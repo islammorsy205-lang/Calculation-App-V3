@@ -8,7 +8,7 @@ import os
 import ast
 import re
 import matplotlib
-matplotlib.use('Agg') # 💡 وضع الخوادم لمنع أي انهيار للواجهة
+matplotlib.use('Agg') 
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
 from docx import Document
@@ -17,13 +17,13 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
+# استدعاء دوال البناء الخاصة بالمشروع
+from report_builder import insert_blue_banner, append_pdf_stream_to_word, add_eq
+
 # =========================================================
-# 1. Native HTML Parser Engine (Extracting EVERYTHING Safely)
+# 1. Native HTML Parser Engine 
 # =========================================================
 def parse_bridge_html_native(html_content):
-    """يقرأ مصفوفات الجافاسكريبت وجداول الـ HTML بنظام الاستخراج النصي الآمن تماماً لتجنب أعطال الذاكرة"""
-    
-    # 1. Extract Arrays using pure string finding
     def extract_array_str(var_name):
         start_marker = f"const {var_name}"
         idx_start = html_content.find(start_marker)
@@ -47,9 +47,8 @@ def parse_bridge_html_native(html_content):
         nodes = ast.literal_eval(clean_js_to_python(nodes_raw))
         elements = ast.literal_eval(clean_js_to_python(elems_raw))
     except Exception as e:
-        st.error(f"⚠️ خطأ في قراءة مصفوفات النموذج: {e}")
+        st.error(f"⚠️ خطأ في قراءة المصفوفات: {e}")
 
-    # 2. Extract Tables Natively (Bypassing Pandas to prevent Crashes)
     tables = []
     table_blocks = re.findall(r'<table.*?>(.*?)</table>', html_content, re.DOTALL | re.IGNORECASE)
     
@@ -67,7 +66,7 @@ def parse_bridge_html_native(html_content):
     return nodes, elements, tables
 
 # =========================================================
-# 2. SAP2000 Plotting Engine (All Diagrams & Styles)
+# 2. SAP2000 Plotting Engine
 # =========================================================
 def safe_render_fig(fig):
     try:
@@ -108,13 +107,11 @@ def draw_sap2000_forces(val_key, nodes, elements, scale, is_axial=False):
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
-    
     nodes_dict = draw_base_structure(ax, nodes, elements)
 
     for el in elements:
         n1, n2 = nodes_dict.get(el['i']), nodes_dict.get(el['j'])
         if not n1 or not n2: continue
-        
         x1, y1 = float(n1['x']), float(n1['y'])
         x2, y2 = float(n2['x']), float(n2['y'])
         dx, dy = x2 - x1, y2 - y1
@@ -130,7 +127,6 @@ def draw_sap2000_forces(val_key, nodes, elements, scale, is_axial=False):
         if len(vals_orig) == 0: continue
         
         plot_vals = -vals_orig if val_key != 'N' else vals_orig
-        
         px_arr = x1 + c * (ts * L_s) - s * plot_vals * scale
         py_arr = y1 + s * (ts * L_s) + c * plot_vals * scale
         
@@ -161,7 +157,6 @@ def draw_sap2000_deflection(nodes, elements, defl_scale):
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
-    
     nodes_dict = draw_base_structure(ax, nodes, elements)
     max_defl = 0
     max_pt = None
@@ -202,11 +197,11 @@ def draw_sap2000_reactions(nodes, elements):
         if abs(ry) > 0.1:
             dy = -arr_len if ry > 0 else arr_len
             ax.arrow(x, y + dy, 0, -dy*0.8, head_width=0.3, head_length=0.4, fc='darkorange', ec='darkorange', lw=1.5, zorder=6)
-            ax.text(x, y + dy - np.sign(dy)*0.3, f"{abs(ry):.1f} kN", color='black', fontsize=7, fontweight='bold', ha='center')
+            ax.text(x, y + dy - np.sign(dy)*0.3, f"{abs(ry):.1f}", color='black', fontsize=7, fontweight='bold', ha='center')
         if abs(rx) > 0.1:
             dx = -arr_len if rx > 0 else arr_len
             ax.arrow(x + dx, y, -dx*0.8, 0, head_width=0.3, head_length=0.4, fc='darkorange', ec='darkorange', lw=1.5, zorder=6)
-            ax.text(x + dx - np.sign(dx)*0.3, y, f"{abs(rx):.1f} kN", color='black', fontsize=7, fontweight='bold', va='center')
+            ax.text(x + dx - np.sign(dx)*0.3, y, f"{abs(rx):.1f}", color='black', fontsize=7, fontweight='bold', va='center')
 
     return safe_render_fig(fig)
 
@@ -214,7 +209,6 @@ def draw_sap2000_loads(nodes, elements):
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
-    
     nodes_dict = draw_base_structure(ax, nodes, elements)
     max_w = max([abs(float(el.get('wTotal', 0))) for el in elements] + [1])
     scale_h = 1.5 / max_w
@@ -233,14 +227,15 @@ def draw_sap2000_loads(nodes, elements):
         for i in range(1, num_arr):
             fx, fy = x1 + (x2-x1) * (i/num_arr), y1 + (y2-y1) * (i/num_arr)
             ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
-        ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f} kN/m", color='blue', fontsize=7, fontweight='bold', ha='center')
+        ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f}", color='blue', fontsize=7, fontweight='bold', ha='center')
 
     return safe_render_fig(fig)
 
 # =========================================================
-# 3. Comprehensive Report Generator (Word)
+# 3. Comprehensive Report Generator (Word Flow)
 # =========================================================
-def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict):
+def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict, proj_info):
+    
     if os.path.exists("Acrow_Template.docx"):
         doc = Document("Acrow_Template.docx")
         doc.add_page_break()
@@ -266,9 +261,120 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         if color: r.font.color.rgb = color
         return p
 
-    def add_native_table_to_word(doc, table_data, title):
-        if not table_data or len(table_data) < 2: return
-        add_line(title, bold=True, size=13, color=RGBColor(0,0,128))
+    # --- Cover Page Replacements ---
+    def remove_hardcoded_prefix(p):
+        if p.text and "CALCULATION SHEET FOR" in p.text.upper():
+            clean_text = re.sub(r'(?i)CALCULATION SHEET FOR\s*', '', p.text)
+            if p.runs:
+                f_name, f_size, f_bold, f_color = p.runs[0].font.name, p.runs[0].font.size, p.runs[0].font.bold, p.runs[0].font.color.rgb if p.runs[0].font.color else None
+                for r in p.runs: r.text = ""
+                p.runs[0].text = clean_text
+                p.runs[0].font.name, p.runs[0].font.size, p.runs[0].font.bold = f_name, f_size, f_bold
+                if f_color: p.runs[0].font.color.rgb = f_color
+            else:
+                p.text = clean_text
+
+    for p in doc.paragraphs: remove_hardcoded_prefix(p)
+    for tbl in doc.tables:
+        for row in tbl.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs: remove_hardcoded_prefix(p)
+
+    replacements = {
+        "[PROJECT_NAME]": proj_info.get('proj_name', ''),
+        "[CONTRACTOR]": proj_info.get('contractor', ''),
+        "[CALC_SUBJECT]": proj_info.get('calc_sub', ''),
+        "[SYSTEM_NAME]": proj_info.get('sys_name', '')
+    }
+    
+    cover_img = proj_info.get('cover_img')
+    for p in doc.paragraphs:
+        if "[COVER_IMAGE]" in p.text:
+            for r in p.runs: r.text = r.text.replace("[COVER_IMAGE]", "")
+            if cover_img and cover_img != "No images found." and os.path.exists(cover_img):
+                p.add_run().add_picture(cover_img, width=Cm(15.0))
+        for k, v in replacements.items():
+            if k in p.text:
+                for r in p.runs: r.text = r.text.replace(k, str(v))
+                if k in p.text: p.text = p.text.replace(k, str(v))
+
+    for tbl in doc.tables:
+        for row in tbl.rows:
+            for cell in row.cells:
+                for p in cell.paragraphs:
+                    for k, v in replacements.items():
+                        if k in p.text:
+                            for r in p.runs: r.text = r.text.replace(k, str(v))
+                            if k in p.text: p.text = p.text.replace(k, str(v))
+                                
+    doc.add_page_break()
+    
+    # --- Headers and Footers ---
+    for sec in doc.sections:
+        for hf in [sec.header, sec.first_page_header, sec.footer, sec.first_page_footer]:
+            if hf:
+                for tbl in hf.tables:
+                    for row in tbl.rows:
+                        for cell in row.cells:
+                            for p in cell.paragraphs:
+                                for k, v in {"[PROJECT_NAME]": proj_info.get('proj_name',''), "[CONTRACTOR]": proj_info.get('contractor',''), "[PROJ_NO]": proj_info.get('proj_no',''), "[DATE]": proj_info.get('date_val',''), "[CALC_BY]": proj_info.get('calc_by',''), "[CHK_BY]": proj_info.get('chk_by',''), "[REV]": "00"}.items():
+                                    if k in p.text:
+                                        for r in p.runs: r.text = r.text.replace(k, str(v))
+                                        if k in p.text: p.text = p.text.replace(k, str(v))
+                                        for r in p.runs: r.font._element.set(qn('w:ascii'), 'Arial')
+    
+    # --- Regulations & Standards ---
+    insert_blue_banner(doc, "REGULATIONS AND STANDARDS", font_size=16)
+    doc.add_paragraph()
+    ref_code = proj_info.get('ref_code', 'BS')
+    if "BS" in ref_code: 
+        add_eq(doc, "1- BS 5975-1996: FORMWORK FOR CONCRETE")
+        add_eq(doc, "2- BS 5975-2008: FORMWORK FOR CONCRETE")
+        add_eq(doc, "3- FORMWORK AGUIDE TO AGOOD PRATICE")
+        add_eq(doc, "4- WISA®-FORM PLYWOOD.")
+        add_eq(doc, "5- THE SAUDI BUILDING CODE (SBC) 2018")
+    else: 
+        add_eq(doc, "1- ACI 347R-14 ....... GUIDE TO FORMWORK FOR CONCRETE.")
+        add_eq(doc, "2- ACI SP-4 ......... FORMWORK FOR CONCRETE.")
+        add_eq(doc, "3- WISA®-FORM PLYWOOD.")
+        add_eq(doc, "4- THE SAUDI BUILDING CODE (SBC) 2018")
+    
+    # --- Data Sheets ---
+    data_sheets = proj_info.get('data_sheets', [])
+    if data_sheets:
+        doc.add_page_break()
+        insert_blue_banner(doc, "FORMWORK MATERIALS TECHNICAL DATA", font_size=14)
+        for f in data_sheets:
+            if os.path.exists(f): 
+                append_pdf_stream_to_word(f, doc, is_path=True, max_width_cm=17.5, max_height_cm=24.0, add_border=True, reduce_first_page=True)
+    
+    # --- Design Loads ---
+    design_pdf = "Design_Loads_BS.pdf" if "BS" in ref_code and os.path.exists("Design_Loads_BS.pdf") else ("Design_Loads_ACI.pdf" if "ACI" in ref_code and os.path.exists("Design_Loads_ACI.pdf") else None)
+    if design_pdf: 
+        doc.add_page_break()
+        insert_blue_banner(doc, "DESIGN LOADS FOR SLAB", font_size=14)
+        append_pdf_stream_to_word(design_pdf, doc, is_path=True, max_width_cm=17.5, max_height_cm=24.0, add_border=True, reduce_first_page=True)
+        
+    # --- Formwork Sketches Banner ---
+    doc.add_page_break()
+    insert_blue_banner(doc, "FORMWORK SKETCHES", font_size=16)
+
+    # --- Extracted Bridge Content ---
+    doc.add_page_break()
+    add_line("BRIDGE FORMWORK DESIGN DATA (EXTRACTED)", bold=True, size=14)
+    doc.add_paragraph()
+    
+    # 1. Extracted Tables
+    table_titles = [
+        "Nodal Displacements", "Element Internal Forces Summary", "BMD Extreme Values",
+        "SFD Extreme Values", "Axial Force (Main Members)", "Axial Force (Bracing)",
+        "Deflection Check", "Support Reactions Summary", "Applied Loads"
+    ]
+    
+    for i, table_data in enumerate(tables):
+        if not table_data or len(table_data) < 2: continue
+        title = table_titles[i] if i < len(table_titles) else f"Data Table {i+1}"
+        add_line(f"Table {i+1}: {title}", bold=True, size=11, color=RGBColor(0,0,128))
         
         cols_count = len(table_data[0])
         table = doc.add_table(rows=len(table_data), cols=cols_count)
@@ -294,85 +400,41 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
                                     run.font.bold = True
         doc.add_paragraph()
 
-    # --- 1. Cover ---
-    p_title = doc.add_paragraph()
-    force_ltr_left(p_title)
-    run_title = p_title.add_run("CALCULATION SHEET FOR BRIDGE STRUCTURE (FULL FEA)")
-    run_title.font.name = 'Arial'
-    run_title.font.size = Pt(16)
-    run_title.font.bold = True
-    
-    add_line("="*60, bold=True)
-    add_line("1. Executive Summary:", bold=True, size=14)
-    add_line(f"- Total Nodes Analyzed: {len(nodes)}")
-    add_line(f"- Total Elements Analyzed: {len(elements)}")
-    
-    max_m, max_v, max_n_tens, max_n_comp = 0, 0, 0, 0
-    for el in elements:
-        if 'maxM' in el: max_m = max(max_m, abs(float(el['maxM'])))
-        if 'maxV' in el: max_v = max(max_v, abs(float(el['maxV'])))
-        if 'maxN' in el:
-            n_val = float(el['maxN'])
-            if n_val > 0: max_n_tens = max(max_n_tens, n_val)
-            else: max_n_comp = min(max_n_comp, n_val)
-            
-    add_line("\n2. Global Force Extremes:", bold=True)
-    add_line(f"- Maximum Bending Moment = {max_m:.2f} kN.m")
-    add_line(f"- Maximum Shear Force = {max_v:.2f} kN")
-    add_line(f"- Maximum Axial Tension = {max_n_tens:.2f} kN")
-    add_line(f"- Maximum Axial Compression = {abs(max_n_comp):.2f} kN")
-    
-    add_line("\n3. Support Reactions:", bold=True)
-    for n in nodes:
-        if n.get('fixX') or n.get('fixY') or n.get('fixT'):
-            rx, ry = float(n.get('rx', 0)), float(n.get('ry', 0))
-            add_line(f"- Node {n.get('name', 'N')}: Rx = {rx:.2f} kN | Ry = {ry:.2f} kN", color=RGBColor(0, 100, 0))
-
-    # --- 2. Tables ---
+    # 2. Diagrams in Specific Order matching Images
     doc.add_page_break()
-    add_line("4. Structural Analysis Tables & Safety Checks:", bold=True, size=15)
-    doc.add_paragraph()
     
-    table_titles = [
-        "Nodal Displacements", "Element Internal Forces Summary", "BMD Extreme Values",
-        "SFD Extreme Values", "Axial Force (Main Members)", "Axial Force (Bracing)",
-        "Deflection Check", "Support Reactions Summary", "Applied Loads"
-    ]
-    
-    for i, tbl_data in enumerate(tables):
-        title = table_titles[i] if i < len(table_titles) else f"Data Table {i+1}"
-        add_native_table_to_word(doc, tbl_data, f"Table {i+1}: {title}")
+    # Red Header Helper
+    def add_red_underlined_header(text):
+        p = doc.add_paragraph()
+        force_ltr_left(p)
+        r = p.add_run(text)
+        r.font.name = 'Arial'
+        r.font.size = Pt(12)
+        r.font.bold = True
+        r.font.underline = True
+        r.font.color.rgb = RGBColor(255, 0, 0)
+        return p
 
-    # --- 3. Diagrams ---
-    doc.add_page_break()
-    add_line("5. Structural Diagrams (SAP2000 Convention):", bold=True, size=15)
-    
     diagram_order = [
-        ('L', "Global Applied Loads (kN/m)"),
-        ('N', "Axial Force Diagram (kN) [Blue = Tension, Red = Compression]"),
-        ('V', "Shear Force Diagram (kN)"),
-        ('M', "Bending Moment Diagram (kN.m)"),
-        ('D', "Global Deflection Deformed Shape (mm)"),
-        ('R', "Global Support Reactions (kN)")
+        ('L', "LOAD DISTRIBUTION DIAGRAM FOR LOADS (KN/m'):"),
+        ('M', "BENDING MOMENT DIAGRAM DUE TO (DL+LL) (KN.m):"),
+        ('N', "NORMAL FORCE DIAGRAM DUE TO (DL+LL) (KN):"),
+        ('V', "SHEAR FORCE DIAGRAM DUE TO (DL+LL) (KN):"),
+        ('D', "DEFLECTION SHAPE DIAGRAM (mm):"),
+        ('R', "SHOREBRACE REACTIONS :")
     ]
     
     for key, title in diagram_order:
         img_bytes = img_bytes_dict.get(key)
         if not img_bytes: continue
         
+        add_red_underlined_header(title)
+        
         p_img = doc.add_paragraph()
         p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
         p_img.add_run().add_picture(io.BytesIO(img_bytes), width=Cm(16.5))
-        
-        p_txt = doc.add_paragraph()
-        p_txt.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        r_txt = p_txt.add_run(title)
-        r_txt.font.name = 'Arial'
-        r_txt.font.size = Pt(10)
-        r_txt.font.bold = True
-        r_txt.underline = True
-        doc.add_page_break()
-    
+        doc.add_paragraph()
+
     out = io.BytesIO()
     doc.save(out)
     return out
@@ -380,7 +442,7 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
 # =========================================================
 # 4. Main UI Module
 # =========================================================
-def render_bridge_module():
+def render_bridge_module(proj_info):
     st.markdown("## 🌉 Bridge Formwork & Structures (Advanced FEA Extractor)")
     st.info("💡 **Smart Extractor:** Upload your Acrow Bridge HTML Report to extract all calculations, safety checks, and diagrams. Convert them instantly to SAP2000 style and generate a complete Word calculation sheet.")
     
@@ -398,7 +460,6 @@ def render_bridge_module():
             
             diag_placeholder = st.empty()
             
-            # Sliders تحت الدايجرامات
             st.markdown("### 🎛️ Customize Diagram Scales")
             c_s1, c_s2, c_s3, c_s4 = st.columns(4)
             sc_n = c_s1.slider("Axial Scale", 0.001, 0.050, 0.015, step=0.001)
@@ -436,7 +497,8 @@ def render_bridge_module():
                 if st.button("🚀 Process & Generate Calculation Sheet", type="primary", use_container_width=True):
                     with st.spinner("Building Comprehensive Word Document..."):
                         try:
-                            docx_out = generate_comprehensive_bridge_report(nodes, elements, tables, img_bufs)
+                            # 💡 نمرر هنا بيانات المشروع (proj_info) لبناء النوتة الكاملة
+                            docx_out = generate_comprehensive_bridge_report(nodes, elements, tables, img_bufs, proj_info)
                             st.session_state['bridge_docx_bytes'] = docx_out.getvalue()
                             st.success("✅ Document Ready! You can download it below.")
                         except Exception as e:
