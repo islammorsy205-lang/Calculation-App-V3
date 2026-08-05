@@ -46,8 +46,8 @@ def build_multi_segment_mesh(segments, sec_props, loads, struts, base_sec, suppo
         seg_start_coords.append((curr_x, curr_y))
         
         keys = [0.0, L]
-        for st in struts:
-            if st['seg_idx'] == i: keys.append(st['dist'])
+        for st_item in struts:
+            if st_item['seg_idx'] == i: keys.append(st_item['dist'])
         for ld in loads:
             if ld['seg_idx'] == i:
                 keys.append(ld['start'])
@@ -109,7 +109,7 @@ def build_multi_segment_mesh(segments, sec_props, loads, struts, base_sec, suppo
     # 2. الأرضية أو الكمرة السفلية
     base_x_pts = [0.0]
     for n in nodes: base_x_pts.append(n[0])
-    for st in struts: base_x_pts.append(st['gx'])
+    for st_item in struts: base_x_pts.append(st_item['gx'])
     for sup in supports: base_x_pts.append(sup['x'])
     
     base_x_pts = sorted(list(set([round(x, 4) for x in base_x_pts])))
@@ -130,10 +130,10 @@ def build_multi_segment_mesh(segments, sec_props, loads, struts, base_sec, suppo
             })
 
     # 3. النهايز
-    for st in struts:
-        seg_idx = st['seg_idx']
-        dist = st['dist']
-        gx = st['gx']
+    for st_item in struts:
+        seg_idx = st_item['seg_idx']
+        dist = st_item['dist']
+        gx = st_item['gx']
         
         ang_rad = np.radians(segments[seg_idx]['angle'])
         sx, sy = seg_start_coords[seg_idx]
@@ -144,7 +144,7 @@ def build_multi_segment_mesh(segments, sec_props, loads, struts, base_sec, suppo
         bot_node = get_or_add_node(gx, 0.0)
         
         elements.append({
-            'type': 'truss', 'group': 'strut', 'sec': st['sec'],
+            'type': 'truss', 'group': 'strut', 'sec': st_item['sec'],
             'n1': bot_node, 'n2': top_node,
             'E': 21000000.0, 'A': 0.001
         })
@@ -473,6 +473,7 @@ def draw_live_preview(nodes, elements, supports_list, shape_mode, **kwargs):
             mid_x = sum([n[0] for n in nodes])/len(nodes)
             ax.text(mid_x, max_y + scale_h + 0.3, f"{applied_w:.2f} kN/m", color='blue', fontsize=9, fontweight='bold', ha='center')
 
+    # رسم النقط للمساعدة البصرية
     for i, n in enumerate(nodes):
         if any(el['n1'] == i or el['n2'] == i for el in elements if el['type'] == 'frame'):
             ax.plot(n[0], n[1], 'ko', markersize=2)
@@ -544,7 +545,6 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
             max_idx = np.argmax(np.abs(vals))
             v_max = abs(vals[max_idx])
             
-            # Smart Decluttering Filter
             if v_max > 0.1 and (L > 0.4 or v_max >= global_max * 0.95):
                 ax_f.text(px[max_idx]-s*0.3, py[max_idx]+c*0.3, f"{v_max:.1f}", fontsize=7, color='black', ha='center', va='center')
                 
@@ -564,7 +564,7 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
     for el in elements:
         if el['type'] == 'frame':
             xs = el['internal']['x']
-            v_rel = el['internal']['v_rel'] * 20.0 # Scale
+            v_rel = el['internal']['v_rel'] * 20.0 # مقياس تكبير الرسم
             x1, y1 = nodes[el['n1']]
             c, s = el['c'], el['s']
             px = x1 + c * xs - s * v_rel
@@ -596,7 +596,6 @@ def render_advanced_shape_module():
             sec_list = list(SECTIONS_DB.keys()) if SECTIONS_DB else ["Soldier U100"]
             sec_name = st.selectbox("Profile Section", sec_list)
             raw = SECTIONS_DB.get(sec_name, {})
-            # Safe access for Area and Inertia
             s_E = raw.get('E', 2100.0)
             s_A = raw.get('A', raw.get('A_cm2', 34.3) / 10000.0)
             s_I = raw.get('I', raw.get('I_cm4', 412.0))
@@ -640,6 +639,7 @@ def render_advanced_shape_module():
         st.markdown("### 2. Loads & Supports")
         loads_data = []
         applied_w = 0.0
+        point_load = 0.0
         
         if shape_mode == "🔗 Multi-Segment (Polygonal)":
             num_loads = st.number_input("Count of Loads", 1, 10, 1)
@@ -651,14 +651,14 @@ def render_advanced_shape_module():
                 l_dir = lc3.selectbox("Direction", ["Gravity (Vertical ↓)", "Perpendicular (Local ↘)"], key=f"ld_d_{i}")
                 
                 sc1, sc2, sc3 = st.columns(3)
-                start = sc1.number_input("Start Dist (m)", 0.0, segments[s_idx]['L'], 0.0, key=f"ld_st_{i}")
+                start = sc1.number_input("Start Dist (m)", 0.0, float(segments[s_idx]['L']), 0.0, key=f"ld_st_{i}")
                 w1 = sc2.number_input("Value W1 (kN/m or kN)", value=15.0, key=f"ld_w1_{i}")
                 
                 if l_type == "Uniform":
-                    end = sc3.number_input("End Dist (m)", 0.0, segments[s_idx]['L'], segments[s_idx]['L'], key=f"ld_en_{i}")
+                    end = sc3.number_input("End Dist (m)", 0.0, float(segments[s_idx]['L']), float(segments[s_idx]['L']), key=f"ld_en_{i}")
                     w2 = w1
                 elif l_type == "Trapezoidal":
-                    end = sc3.number_input("End Dist (m)", 0.0, segments[s_idx]['L'], segments[s_idx]['L'], key=f"ld_en_{i}")
+                    end = sc3.number_input("End Dist (m)", 0.0, float(segments[s_idx]['L']), float(segments[s_idx]['L']), key=f"ld_en_{i}")
                     w2 = st.number_input("Value W2 (kN/m)", value=5.0, key=f"ld_w2_{i}")
                 else:
                     end = start; w2 = w1
@@ -681,12 +681,14 @@ def render_advanced_shape_module():
         struts_x_pos = []
         
         if shape_mode == "🔗 Multi-Segment (Polygonal)":
-            st.write("Select Nodes to support with Struts to ground:")
-            num_nodes = int(num_segs) + 1
-            cols = st.columns(min(num_nodes, 8))
-            for i in range(1, num_nodes-1):
-                if cols[i%len(cols)].checkbox(f"Node {i}", value=True):
-                    struts_data.append({'node_idx': i, 'sec': strut_sec})
+            num_struts = st.number_input("Count of Struts (Push-Pulls)", 0, 10, 1)
+            for i in range(int(num_struts)):
+                st.write(f"**Strut {i+1}:**")
+                cc1, cc2, cc3 = st.columns(3)
+                s_idx = cc1.selectbox("On Seg No.", range(1, int(num_segs)+1), key=f"st_s_{i}") - 1
+                dist = cc2.number_input("Dist from Seg Start (m)", 0.0, float(segments[s_idx]['L']), float(segments[s_idx]['L'])/2, key=f"st_d_{i}")
+                gx = cc3.number_input("Ground X (m)", value=float(i+1)*2.0, step=0.5, key=f"st_gx_{i}")
+                struts_data.append({'seg_idx': s_idx, 'dist': dist, 'gx': gx, 'sec': strut_sec})
         else:
             st.write("Specify X-coordinates along the Span to place Struts:")
             num_struts = st.number_input("Number of Struts", min_value=0, max_value=10, value=2)
@@ -695,7 +697,7 @@ def render_advanced_shape_module():
                 sx = scols[i%4].number_input(f"Strut {i+1} X (m)", value=(i+1)*span/(num_struts+1), step=0.5)
                 struts_x_pos.append(sx)
 
-        st.markdown("### 5. Base System (Optional)")
+        st.markdown("### 3. Base System (Optional)")
         bs1, bs2 = st.columns(2)
         base_sec_list = ["Soldier U100", "None (Direct to Ground)"]
         base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=1)
