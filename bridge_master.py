@@ -17,7 +17,7 @@ from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml import OxmlElement
 from docx.oxml.ns import qn
 
-# 💡 تم إضافة سطر الاستدعاء الخاص بدوال بناء الوورد
+# 💡 السر هنا: استدعاء دوال بناء الوورد (العناوين، المعادلات، الـ PDF)
 from report_builder import insert_blue_banner, add_eq, append_pdf_stream_to_word
 
 # =========================================================
@@ -26,7 +26,6 @@ from report_builder import insert_blue_banner, add_eq, append_pdf_stream_to_word
 def parse_bridge_html_native(html_content):
     """يقرأ مصفوفات الجافاسكريبت وجداول الـ HTML بنظام الاستخراج النصي الآمن تماماً لتجنب أعطال الذاكرة"""
     
-    # 1. Extract Arrays using pure string finding
     def extract_array_str(var_name):
         start_marker = f"const {var_name}"
         idx_start = html_content.find(start_marker)
@@ -52,7 +51,6 @@ def parse_bridge_html_native(html_content):
     except Exception as e:
         st.error(f"⚠️ خطأ في قراءة مصفوفات النموذج: {e}")
 
-    # 2. Extract Tables Natively (Bypassing Pandas to prevent Crashes)
     tables = []
     table_blocks = re.findall(r'<table.*?>(.*?)</table>', html_content, re.DOTALL | re.IGNORECASE)
     
@@ -517,7 +515,7 @@ def render_bridge_module(proj_info):
                 if st.button("🚀 Process & Generate Calculation Sheet", type="primary", use_container_width=True):
                     with st.spinner("Building Comprehensive Word Document..."):
                         try:
-                            # 💡 نمرر هنا بيانات المشروع لبناء النوتة الكاملة
+                            # 💡 نمرر هنا بيانات المشروع (proj_info) لبناء النوتة الكاملة
                             docx_out = generate_comprehensive_bridge_report(nodes, elements, tables, img_bufs, proj_info)
                             st.session_state['bridge_docx_bytes'] = docx_out.getvalue()
                             st.success("✅ Document Ready! You can download it below.")
