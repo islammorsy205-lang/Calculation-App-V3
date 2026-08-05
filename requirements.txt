@@ -1,0 +1,9 @@
+streamlit
+pandas
+numpy
+matplotlib
+python-docx
+PyMuPDF
+Pillow
+gspread
+starlette==0.37.2
