@@ -14,18 +14,15 @@ from matplotlib.patches import Polygon
 from docx import Document
 from docx.shared import Cm, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
+from docx.oxml import OxmlElement, parse_xml
+from docx.oxml.ns import nsdecls, qn
 
-# 💡 السر هنا: استدعاء دوال بناء الوورد (العناوين، المعادلات، الـ PDF)
 from report_builder import insert_blue_banner, add_eq, append_pdf_stream_to_word
 
 # =========================================================
-# 1. Native HTML Parser Engine (Extracting EVERYTHING Safely)
+# 1. Native HTML Parser Engine 
 # =========================================================
 def parse_bridge_html_native(html_content):
-    """يقرأ مصفوفات الجافاسكريبت وجداول الـ HTML بنظام الاستخراج النصي الآمن تماماً لتجنب أعطال الذاكرة"""
-    
     def extract_array_str(var_name):
         start_marker = f"const {var_name}"
         idx_start = html_content.find(start_marker)
@@ -68,7 +65,7 @@ def parse_bridge_html_native(html_content):
     return nodes, elements, tables
 
 # =========================================================
-# 2. SAP2000 Plotting Engine (All Diagrams & Styles)
+# 2. SAP2000 Plotting Engine (With New Labels)
 # =========================================================
 def safe_render_fig(fig):
     try:
@@ -105,11 +102,42 @@ def draw_base_structure(ax, nodes, elements):
                 ax.plot([x - 0.2, x + 0.2], [y - h - 2*r, y - h - 2*r], color='limegreen', lw=2.0, zorder=4)
     return nodes_dict
 
+# 💡 الدالة الجديدة لرسم الـ Joint Labels
+def draw_joint_labels(nodes, elements):
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.set_aspect('equal', adjustable='datalim')
+    ax.axis('off')
+    draw_base_structure(ax, nodes, elements)
+    
+    for n in nodes:
+        x, y = float(n['x']), float(n['y'])
+        ax.plot(x, y, 'ko', markersize=3, zorder=6)
+        label = n.get('name', f"N{n['id']}")
+        ax.text(x, y + 0.15, label, fontsize=6, ha='center', va='bottom', zorder=7,
+                bbox=dict(facecolor='white', edgecolor='gray', alpha=0.9, pad=1.5))
+    return safe_render_fig(fig)
+
+# 💡 الدالة الجديدة لرسم الـ Member Labels
+def draw_member_labels(nodes, elements):
+    fig, ax = plt.subplots(figsize=(10, 4))
+    ax.set_aspect('equal', adjustable='datalim')
+    ax.axis('off')
+    nodes_dict = draw_base_structure(ax, nodes, elements)
+    
+    for el in elements:
+        n1, n2 = nodes_dict.get(el['i']), nodes_dict.get(el['j'])
+        if not n1 or not n2: continue
+        x_mid = (float(n1['x']) + float(n2['x'])) / 2
+        y_mid = (float(n1['y']) + float(n2['y'])) / 2
+        label = el.get('name', f"E{el['id']}")
+        ax.text(x_mid, y_mid, label, fontsize=6, ha='center', va='center', color='darkblue', zorder=7,
+                bbox=dict(facecolor='white', edgecolor='lightblue', alpha=0.9, pad=1.5))
+    return safe_render_fig(fig)
+
 def draw_sap2000_forces(val_key, nodes, elements, scale, is_axial=False):
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
-    
     nodes_dict = draw_base_structure(ax, nodes, elements)
 
     for el in elements:
@@ -131,10 +159,8 @@ def draw_sap2000_forces(val_key, nodes, elements, scale, is_axial=False):
         if len(vals_orig) == 0: continue
         
         plot_vals = -vals_orig if val_key != 'N' else vals_orig
-        
         px_arr = x1 + c * (ts * L_s) - s * plot_vals * scale
         py_arr = y1 + s * (ts * L_s) + c * plot_vals * scale
-        
         color_pos, color_neg = 'blue', 'red'
         
         ax.plot([x1, px_arr[0]], [y1, py_arr[0]], color=color_pos if vals_orig[0] >= 0 else color_neg, linewidth=0.8)
@@ -162,7 +188,6 @@ def draw_sap2000_deflection(nodes, elements, defl_scale):
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
-    
     nodes_dict = draw_base_structure(ax, nodes, elements)
     max_defl = 0
     max_pt = None
@@ -203,11 +228,11 @@ def draw_sap2000_reactions(nodes, elements):
         if abs(ry) > 0.1:
             dy = -arr_len if ry > 0 else arr_len
             ax.arrow(x, y + dy, 0, -dy*0.8, head_width=0.3, head_length=0.4, fc='darkorange', ec='darkorange', lw=1.5, zorder=6)
-            ax.text(x, y + dy - np.sign(dy)*0.3, f"{abs(ry):.1f} kN", color='black', fontsize=7, fontweight='bold', ha='center')
+            ax.text(x, y + dy - np.sign(dy)*0.3, f"{abs(ry):.1f}", color='black', fontsize=7, fontweight='bold', ha='center')
         if abs(rx) > 0.1:
             dx = -arr_len if rx > 0 else arr_len
             ax.arrow(x + dx, y, -dx*0.8, 0, head_width=0.3, head_length=0.4, fc='darkorange', ec='darkorange', lw=1.5, zorder=6)
-            ax.text(x + dx - np.sign(dx)*0.3, y, f"{abs(rx):.1f} kN", color='black', fontsize=7, fontweight='bold', va='center')
+            ax.text(x + dx - np.sign(dx)*0.3, y, f"{abs(rx):.1f}", color='black', fontsize=7, fontweight='bold', va='center')
 
     return safe_render_fig(fig)
 
@@ -233,7 +258,10 @@ def draw_sap2000_loads(nodes, elements):
         for i in range(1, num_arr):
             fx, fy = x1 + (x2-x1) * (i/num_arr), y1 + (y2-y1) * (i/num_arr)
             ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
-        ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f} kN/m", color='blue', fontsize=7, fontweight='bold', ha='center')
+            
+        # إضافة Label الحمل فوقه
+        ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f} kN/m", color='blue', fontsize=6, fontweight='bold', ha='center',
+                bbox=dict(facecolor='white', edgecolor='blue', alpha=0.8, pad=0.5))
 
     return safe_render_fig(fig)
 
@@ -267,6 +295,11 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         if color: r.font.color.rgb = color
         return p
 
+    # 💡 الدالة المسؤولة عن تلوين رأس الجدول باللون الأزرق زي الـ HTML
+    def set_cell_background(cell, fill_color):
+        shd = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), fill_color))
+        cell._tc.get_or_add_tcPr().append(shd)
+
     def add_native_table_to_word(doc, table_data, title):
         if not table_data or len(table_data) < 2: return
         add_line(title, bold=True, size=13, color=RGBColor(0,0,128))
@@ -274,25 +307,29 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         cols_count = len(table_data[0])
         table = doc.add_table(rows=len(table_data), cols=cols_count)
         
-        # 💡 حماية إضافية للستايل الافتراضي للجدول
-        try:
-            table.style = 'Table Grid'
+        try: table.style = 'Table Grid'
         except Exception:
-            try:
-                table.style = 'TableGrid'
-            except Exception:
-                pass 
+            try: table.style = 'TableGrid'
+            except Exception: pass 
         
         for r_idx, row_data in enumerate(table_data):
             row_cells = table.rows[r_idx].cells
             for c_idx, cell_text in enumerate(row_data):
                 if c_idx < cols_count:
                     row_cells[c_idx].text = str(cell_text)
+                    
+                    # توسيط النص في الخلايا
                     for paragraph in row_cells[c_idx].paragraphs:
+                        paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                         for run in paragraph.runs:
                             run.font.size = Pt(8)
+                            run.font.name = 'Arial'
+                            
+                            # تنسيق الهيدر (أزرق والكتابة بيضاء)
                             if r_idx == 0:
                                 run.font.bold = True
+                                run.font.color.rgb = RGBColor(255, 255, 255)
+                                set_cell_background(row_cells[c_idx], "5b9bd5") # لون أزرق مطابق لستايل Acrow
                             else:
                                 text_up = str(cell_text).upper()
                                 if "PASS" in text_up or "SAFE" in text_up:
@@ -406,7 +443,7 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
     add_line("BRIDGE FORMWORK DESIGN DATA (EXTRACTED)", bold=True, size=14)
     doc.add_paragraph()
     
-    # 1. Extracted Tables
+    # 1. Extracted Tables (Now with HTML matching styles)
     table_titles = [
         "Nodal Displacements", "Element Internal Forces Summary", "BMD Extreme Values",
         "SFD Extreme Values", "Axial Force (Main Members)", "Axial Force (Bracing)",
@@ -418,10 +455,10 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         title = table_titles[i] if i < len(table_titles) else f"Data Table {i+1}"
         add_native_table_to_word(doc, table_data, f"Table {i+1}: {title}")
 
-    # 2. Diagrams in Specific Order matching Images
+    # 2. Diagrams in Specific Order matching Images + New Labels
     doc.add_page_break()
     
-    # Red Header Helper
+    # 💡 Red Header Helper
     def add_red_underlined_header(text):
         p = doc.add_paragraph()
         force_ltr_left(p)
@@ -433,13 +470,16 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         r.font.color.rgb = RGBColor(255, 0, 0)
         return p
 
+    # 💡 ترتيب الدياجرامات يشمل الـ 3 الجداد اللي طلبتهم في البداية
     diagram_order = [
-        ('L', "LOAD DISTRIBUTION DIAGRAM FOR LOADS (KN/m'):"),
-        ('M', "BENDING MOMENT DIAGRAM DUE TO (DL+LL) (KN.m):"),
-        ('N', "NORMAL FORCE DIAGRAM DUE TO (DL+LL) (KN):"),
-        ('V', "SHEAR FORCE DIAGRAM DUE TO (DL+LL) (KN):"),
-        ('D', "DEFLECTION SHAPE DIAGRAM (mm):"),
-        ('R', "SHOREBRACE REACTIONS :")
+        ('JL', "JOINT LABELS DIAGRAM:"),
+        ('ML', "MEMBER LABELS DIAGRAM:"),
+        ('L',  "GLOBAL APPLIED LOADS & SUPPORTS DIAGRAM (KN/m'):"),
+        ('M',  "BENDING MOMENT DIAGRAM DUE TO (DL+LL) (KN.m):"),
+        ('N',  "NORMAL FORCE DIAGRAM DUE TO (DL+LL) (KN):"),
+        ('V',  "SHEAR FORCE DIAGRAM DUE TO (DL+LL) (KN):"),
+        ('D',  "DEFLECTION SHAPE DIAGRAM (mm):"),
+        ('R',  "SHOREBRACE REACTIONS:")
     ]
     
     for key, title in diagram_order:
@@ -489,7 +529,10 @@ def render_bridge_module(proj_info):
             with diag_placeholder.container():
                 st.markdown("### 🎛️ Live SAP2000-Style Diagrams")
                 try:
+                    # 💡 إضافة رسم الـ Labels للقاموس
                     img_bufs = {
+                        'JL': draw_joint_labels(nodes, elements),
+                        'ML': draw_member_labels(nodes, elements),
                         'L': draw_sap2000_loads(nodes, elements),
                         'N': draw_sap2000_forces('N', nodes, elements, sc_n, is_axial=True),
                         'V': draw_sap2000_forces('V', nodes, elements, sc_v),
@@ -505,6 +548,12 @@ def render_bridge_module(proj_info):
                     c_p3, c_p4 = st.columns(2)
                     c_p3.image(img_bufs['N'], caption="Axial Force Diagram (kN)")
                     c_p4.image(img_bufs['D'], caption="Deflection Deformed Shape")
+                    
+                    # عرض הـ Labels في الواجهة
+                    c_p5, c_p6 = st.columns(2)
+                    c_p5.image(img_bufs['JL'], caption="Joint Labels")
+                    c_p6.image(img_bufs['ML'], caption="Member Labels")
+                    
                     st.image(img_bufs['R'], caption="Support Reactions Diagram")
                 except Exception as e:
                     st.error(f"❌ حدث خطأ أثناء الرسم: {e}")
@@ -515,7 +564,6 @@ def render_bridge_module(proj_info):
                 if st.button("🚀 Process & Generate Calculation Sheet", type="primary", use_container_width=True):
                     with st.spinner("Building Comprehensive Word Document..."):
                         try:
-                            # 💡 نمرر هنا بيانات المشروع (proj_info) لبناء النوتة الكاملة
                             docx_out = generate_comprehensive_bridge_report(nodes, elements, tables, img_bufs, proj_info)
                             st.session_state['bridge_docx_bytes'] = docx_out.getvalue()
                             st.success("✅ Document Ready! You can download it below.")
