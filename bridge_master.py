@@ -65,13 +65,14 @@ def parse_bridge_html_native(html_content):
     return nodes, elements, tables
 
 # =========================================================
-# 2. SAP2000 Plotting Engine (With New Labels)
+# 2. SAP2000 Plotting Engine (With Max Fit & Open Arrows)
 # =========================================================
 def safe_render_fig(fig):
     try:
-        plt.tight_layout()
+        # 💡 إزالة الحواف البيضاء تماماً ورفع الجودة لـ 300 dpi لتناسب التكبير
+        plt.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
         buf = io.BytesIO()
-        fig.savefig(buf, format='png', dpi=200, bbox_inches='tight', transparent=True)
+        fig.savefig(buf, format='png', dpi=300, bbox_inches='tight', pad_inches=0.02, transparent=True)
         return buf.getvalue()
     finally:
         plt.close(fig)
@@ -102,7 +103,6 @@ def draw_base_structure(ax, nodes, elements):
                 ax.plot([x - 0.2, x + 0.2], [y - h - 2*r, y - h - 2*r], color='limegreen', lw=2.0, zorder=4)
     return nodes_dict
 
-# 💡 الدالة الجديدة لرسم الـ Joint Labels
 def draw_joint_labels(nodes, elements):
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.set_aspect('equal', adjustable='datalim')
@@ -117,7 +117,6 @@ def draw_joint_labels(nodes, elements):
                 bbox=dict(facecolor='white', edgecolor='gray', alpha=0.9, pad=1.5))
     return safe_render_fig(fig)
 
-# 💡 الدالة الجديدة لرسم الـ Member Labels
 def draw_member_labels(nodes, elements):
     fig, ax = plt.subplots(figsize=(10, 4))
     ax.set_aspect('equal', adjustable='datalim')
@@ -221,18 +220,43 @@ def draw_sap2000_reactions(nodes, elements):
     ax.axis('off')
     draw_base_structure(ax, nodes, elements)
     
+    # 💡 تم تغيير شكل الأسهم لمثلث مفتوح بدون تهشير باللونين الأزرق والأحمر
     for n in nodes:
         rx, ry = float(n.get('rx', 0)), float(n.get('ry', 0))
         x, y = float(n['x']), float(n['y'])
-        arr_len = 1.2
+        arr_len = 1.5
+        
         if abs(ry) > 0.1:
-            dy = -arr_len if ry > 0 else arr_len
-            ax.arrow(x, y + dy, 0, -dy*0.8, head_width=0.3, head_length=0.4, fc='darkorange', ec='darkorange', lw=1.5, zorder=6)
-            ax.text(x, y + dy - np.sign(dy)*0.3, f"{abs(ry):.1f}", color='black', fontsize=7, fontweight='bold', ha='center')
+            color = 'blue' if ry > 0 else 'red'
+            sign = 1 if ry > 0 else -1
+            y_start = y - arr_len * sign
+            y_end = y
+            
+            # رسم العصا
+            ax.plot([x, x], [y_start, y_end], color=color, lw=1.8, zorder=6)
+            
+            # رسم رأس السهم المفتوح (مثلث ضلعين)
+            hw, hl = 0.25, 0.35
+            ax.plot([x - hw, x, x + hw], [y_end - sign*hl, y_end, y_end - sign*hl], color=color, lw=1.8, zorder=6)
+            
+            # كتابة القيمة
+            ax.text(x, y_start - sign*0.25, f"{abs(ry):.1f}", color='black', fontsize=7, fontweight='bold', ha='center', va='center')
+            
         if abs(rx) > 0.1:
-            dx = -arr_len if rx > 0 else arr_len
-            ax.arrow(x + dx, y, -dx*0.8, 0, head_width=0.3, head_length=0.4, fc='darkorange', ec='darkorange', lw=1.5, zorder=6)
-            ax.text(x + dx - np.sign(dx)*0.3, y, f"{abs(rx):.1f}", color='black', fontsize=7, fontweight='bold', va='center')
+            color = 'blue' if rx > 0 else 'red'
+            sign = 1 if rx > 0 else -1
+            x_start = x - arr_len * sign
+            x_end = x
+            
+            # رسم العصا
+            ax.plot([x_start, x_end], [y, y], color=color, lw=1.8, zorder=6)
+            
+            # رسم رأس السهم المفتوح
+            hw, hl = 0.25, 0.35
+            ax.plot([x_end - sign*hl, x_end, x_end - sign*hl], [y - hw, y, y + hw], color=color, lw=1.8, zorder=6)
+            
+            # كتابة القيمة
+            ax.text(x_start - sign*0.25, y, f"{abs(rx):.1f}", color='black', fontsize=7, fontweight='bold', ha='center', va='center')
 
     return safe_render_fig(fig)
 
@@ -258,8 +282,6 @@ def draw_sap2000_loads(nodes, elements):
         for i in range(1, num_arr):
             fx, fy = x1 + (x2-x1) * (i/num_arr), y1 + (y2-y1) * (i/num_arr)
             ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
-            
-        # إضافة Label الحمل فوقه
         ax.text((x1+x2)/2, (y1+y2)/2 + h + 0.3, f"{abs(w):.2f} kN/m", color='blue', fontsize=6, fontweight='bold', ha='center',
                 bbox=dict(facecolor='white', edgecolor='blue', alpha=0.8, pad=0.5))
 
@@ -295,7 +317,6 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         if color: r.font.color.rgb = color
         return p
 
-    # 💡 الدالة المسؤولة عن تلوين رأس الجدول باللون الأزرق زي الـ HTML
     def set_cell_background(cell, fill_color):
         shd = parse_xml(r'<w:shd {} w:fill="{}"/>'.format(nsdecls('w'), fill_color))
         cell._tc.get_or_add_tcPr().append(shd)
@@ -317,19 +338,15 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
             for c_idx, cell_text in enumerate(row_data):
                 if c_idx < cols_count:
                     row_cells[c_idx].text = str(cell_text)
-                    
-                    # توسيط النص في الخلايا
                     for paragraph in row_cells[c_idx].paragraphs:
                         paragraph.alignment = WD_ALIGN_PARAGRAPH.CENTER
                         for run in paragraph.runs:
                             run.font.size = Pt(8)
                             run.font.name = 'Arial'
-                            
-                            # تنسيق الهيدر (أزرق والكتابة بيضاء)
                             if r_idx == 0:
                                 run.font.bold = True
                                 run.font.color.rgb = RGBColor(255, 255, 255)
-                                set_cell_background(row_cells[c_idx], "5b9bd5") # لون أزرق مطابق لستايل Acrow
+                                set_cell_background(row_cells[c_idx], "5b9bd5")
                             else:
                                 text_up = str(cell_text).upper()
                                 if "PASS" in text_up or "SAFE" in text_up:
@@ -443,7 +460,6 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
     add_line("BRIDGE FORMWORK DESIGN DATA (EXTRACTED)", bold=True, size=14)
     doc.add_paragraph()
     
-    # 1. Extracted Tables (Now with HTML matching styles)
     table_titles = [
         "Nodal Displacements", "Element Internal Forces Summary", "BMD Extreme Values",
         "SFD Extreme Values", "Axial Force (Main Members)", "Axial Force (Bracing)",
@@ -455,10 +471,8 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         title = table_titles[i] if i < len(table_titles) else f"Data Table {i+1}"
         add_native_table_to_word(doc, table_data, f"Table {i+1}: {title}")
 
-    # 2. Diagrams in Specific Order matching Images + New Labels
     doc.add_page_break()
     
-    # 💡 Red Header Helper
     def add_red_underlined_header(text):
         p = doc.add_paragraph()
         force_ltr_left(p)
@@ -470,7 +484,6 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         r.font.color.rgb = RGBColor(255, 0, 0)
         return p
 
-    # 💡 ترتيب الدياجرامات يشمل الـ 3 الجداد اللي طلبتهم في البداية
     diagram_order = [
         ('JL', "JOINT LABELS DIAGRAM:"),
         ('ML', "MEMBER LABELS DIAGRAM:"),
@@ -490,7 +503,8 @@ def generate_comprehensive_bridge_report(nodes, elements, tables, img_bytes_dict
         
         p_img = doc.add_paragraph()
         p_img.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        p_img.add_run().add_picture(io.BytesIO(img_bytes), width=Cm(16.5))
+        # 💡 زيادة العرض لـ 17.5 سم لضمان أقصى عرض (Fit) في الوورد
+        p_img.add_run().add_picture(io.BytesIO(img_bytes), width=Cm(17.5))
         doc.add_paragraph()
 
     out = io.BytesIO()
@@ -529,7 +543,6 @@ def render_bridge_module(proj_info):
             with diag_placeholder.container():
                 st.markdown("### 🎛️ Live SAP2000-Style Diagrams")
                 try:
-                    # 💡 إضافة رسم الـ Labels للقاموس
                     img_bufs = {
                         'JL': draw_joint_labels(nodes, elements),
                         'ML': draw_member_labels(nodes, elements),
@@ -549,7 +562,6 @@ def render_bridge_module(proj_info):
                     c_p3.image(img_bufs['N'], caption="Axial Force Diagram (kN)")
                     c_p4.image(img_bufs['D'], caption="Deflection Deformed Shape")
                     
-                    # عرض הـ Labels في الواجهة
                     c_p5, c_p6 = st.columns(2)
                     c_p5.image(img_bufs['JL'], caption="Joint Labels")
                     c_p6.image(img_bufs['ML'], caption="Member Labels")
