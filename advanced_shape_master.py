@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import io
 import os
+import re
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
@@ -21,9 +22,44 @@ except ImportError:
     st.error("⚠️ برجاء التأكد من وجود ملفات config.py و report_builder.py")
 
 # =========================================================
+# 0. Helper Functions & Styles (From Inclined Master)
+# =========================================================
+def apply_plot_styles():
+    mpl.rcParams['font.family'] = 'sans-serif'
+    mpl.rcParams['font.sans-serif'] = ['Arial', 'Helvetica', 'DejaVu Sans']
+    mpl.rcParams['axes.linewidth'] = 0.3
+    mpl.rcParams['font.size'] = 7
+    mpl.rcParams['font.weight'] = 'normal'
+
+def get_short_name(sec_name):
+    return re.sub(r'\s*\(.*?\)', '', sec_name).strip()
+
+def safe_render_fig(fig):
+    try:
+        plt.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
+        buf = io.BytesIO()
+        fig.savefig(buf, format='png', dpi=300, bbox_inches='tight', pad_inches=0.01, transparent=True)
+        return buf.getvalue()
+    finally:
+        plt.close(fig)
+
+def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
+    if abs(force_mag) < 0.1: return
+    arr_L = 0.8
+    sgn = np.sign(force_mag)
+    dx = sgn * axis_nx
+    dy = sgn * axis_ny
+    start_x = node_x - arr_L * dx
+    start_y = node_y - arr_L * dy
+    arr_c = 'blue' if force_mag >= 0 else 'red'
+    ax.arrow(start_x, start_y, arr_L*dx, arr_L*dy, length_includes_head=True, 
+             head_width=0.15, head_length=0.2, fc=arr_c, ec=arr_c, lw=1.0, zorder=5)
+    ax.text(start_x - 0.25*dx, start_y - 0.25*dy, f"{abs(force_mag):.1f}", 
+            color='black', fontsize=7, fontname='Arial', ha='center', va='center')
+
+# =========================================================
 # 1. Geometry & Mesh Generators (Parametric Chain Engine)
 # =========================================================
-
 def get_parametric_point(x0, y0, th0, kappa, s):
     if abs(kappa) < 1e-6: 
         x = x0 + s * np.cos(th0)
@@ -300,29 +336,20 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
 # =========================================================
 # 3. Plotting Engine (Live Preview & SAP2000 Style)
 # =========================================================
-def safe_render_fig(fig):
-    try:
-        plt.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
-        buf = io.BytesIO()
-        fig.savefig(buf, format='png', dpi=300, bbox_inches='tight', pad_inches=0.01, transparent=True)
-        return buf.getvalue()
-    finally:
-        plt.close(fig)
-
 def draw_base_geometry(ax, nodes, elements, supports_list):
     for el in elements:
         if 'L' not in el and el['type'] != 'truss': continue
         n1, n2 = nodes[el['n1']], nodes[el['n2']]
         if el['type'] == 'truss':
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
-            # 💡 إضافة اسم الناهز في نص الخط (PPH 353 مثلاً)
+            # 💡 كتابة اسم الناهز على الضلع
             mid_x, mid_y = (n1[0]+n2[0])/2, (n1[1]+n2[1])/2
             dx, dy = n2[0]-n1[0], n2[1]-n1[1]
             rot = np.degrees(np.arctan2(dy, dx))
             L_hyp = np.hypot(dx, dy)
             if L_hyp > 1e-4:
                 nx_s, ny_s = -dy/L_hyp, dx/L_hyp
-                ax.text(mid_x + nx_s*0.2, mid_y + ny_s*0.2, el.get('sec', ''), color='black', fontsize=6, rotation=rot, ha='center', va='center')
+                ax.text(mid_x + nx_s*0.2, mid_y + ny_s*0.2, get_short_name(el.get('sec', '')), color='black', fontsize=6, rotation=rot, ha='center', va='center')
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
@@ -362,143 +389,112 @@ def draw_base_geometry(ax, nodes, elements, supports_list):
             lx2, ly2 = x + base_dist*nx + line_w*tx, y + base_dist*ny + line_w*ty
             ax.plot([lx1, lx2], [ly1, ly2], color='limegreen', lw=1.5, zorder=4)
 
-def draw_loads_and_geometry(ax, nodes, elements, supports_list, shape_mode, **kwargs):
+def draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads, segments, seg_starts):
     draw_base_geometry(ax, nodes, elements, supports_list)
+    short_name = get_short_name(sec_name)
 
-    if shape_mode == "🔗 Multi-Segment (Polygonal)":
-        loads = kwargs.get('loads', [])
-        segments = kwargs.get('segments', [])
-        seg_starts = kwargs.get('seg_starts', [])
+    for i, seg in enumerate(segments):
+        s_data = seg_starts[i]
+        mx, my, mth = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], seg['L']/2)
+        ax.text(mx - np.sin(mth)*0.4, my + np.cos(mth)*0.4, f"{short_name} (L={seg['L']:.2f}m)", color='black', fontsize=7, ha='center', va='center', rotation=np.degrees(mth))
+
+    scale_ld = 0.05
+    for ld in loads:
+        i = ld['seg_idx']
+        s_data = seg_starts[i]
         
-        for i, seg in enumerate(segments):
-            s_data = seg_starts[i]
-            mx, my, mth = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], seg['L']/2)
-            ax.text(mx - np.sin(mth)*0.4, my + np.cos(mth)*0.4, f"L{i+1}={seg['L']:.2f}m", color='black', fontsize=7, ha='center', va='center', rotation=np.degrees(mth))
-
-        scale_ld = 0.05
-        for ld in loads:
-            i = ld['seg_idx']
-            s_data = seg_starts[i]
-            
-            px1, py1, th1 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['start'])
-            px2, py2, th2 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['end'])
-            
-            w1, w2 = ld['w1'], ld['w2']
-            
-            if ld['type'] == 'Point Load':
-                h = 1.0
-                if ld['dir'] == 'Gravity (Vertical ↓)':
-                    ax.arrow(px1, py1+h, 0, -h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue', zorder=4)
-                    ax.text(px1, py1+h+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center')
-                else:
-                    c, s = np.cos(th1), np.sin(th1)
-                    start_x, start_y = px1 - s*h, py1 + c*h
-                    ax.arrow(start_x, start_y, s*h, -c*h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue', zorder=4)
-                    ax.text(start_x, start_y+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center', rotation=np.degrees(th1))
+        px1, py1, th1 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['start'])
+        px2, py2, th2 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['end'])
+        
+        w1, w2 = ld['w1'], ld['w2']
+        
+        if ld['type'] == 'Point Load':
+            h = 1.0
+            if ld['dir'] == 'Gravity (Vertical ↓)':
+                ax.arrow(px1, py1+h, 0, -h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue', zorder=4)
+                ax.text(px1, py1+h+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center')
             else:
-                if ld['dir'] == 'Gravity (Vertical ↓)':
-                    hx1, hy1 = px1, py1 + w1 * scale_ld
-                    hx2, hy2 = px2, py2 + w2 * scale_ld
-                else:
-                    c1, s1 = np.cos(th1), np.sin(th1)
-                    c2, s2 = np.cos(th2), np.sin(th2)
-                    hx1, hy1 = px1 - s1 * w1 * scale_ld, py1 + c1 * w1 * scale_ld
-                    hx2, hy2 = px2 - s2 * w2 * scale_ld, py2 + c2 * w2 * scale_ld
-                    
-                ax.add_patch(Polygon([(px1,py1), (hx1,hy1), (hx2,hy2), (px2,py2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2))
+                c, s = np.cos(th1), np.sin(th1)
+                start_x, start_y = px1 - s*h, py1 + c*h
+                ax.arrow(start_x, start_y, s*h, -c*h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue', zorder=4)
+                ax.text(start_x, start_y+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center', rotation=np.degrees(th1))
+        else:
+            if ld['dir'] == 'Gravity (Vertical ↓)':
+                hx1, hy1 = px1, py1 + w1 * scale_ld
+                hx2, hy2 = px2, py2 + w2 * scale_ld
+            else:
+                c1, s1 = np.cos(th1), np.sin(th1)
+                c2, s2 = np.cos(th2), np.sin(th2)
+                hx1, hy1 = px1 - s1 * w1 * scale_ld, py1 + c1 * w1 * scale_ld
+                hx2, hy2 = px2 - s2 * w2 * scale_ld, py2 + c2 * w2 * scale_ld
                 
-                # 💡 رسم أسهم داخلية للتظليل
-                num_arrows = max(2, int(np.hypot(px2-px1, py2-py1) / 0.5))
-                for k in range(1, num_arrows):
-                    frac = k / num_arrows
-                    s_curr = ld['start'] + frac * (ld['end'] - ld['start'])
-                    w_curr = w1 + frac * (w2 - w1)
-                    px_c, py_c, th_c = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], s_curr)
-                    hl = w_curr * scale_ld
-                    if ld['dir'] == 'Gravity (Vertical ↓)':
-                        ax.arrow(px_c, py_c + hl, 0, -hl*0.8, head_width=0.08, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
-                    else:
-                        c_c, s_c = np.cos(th_c), np.sin(th_c)
-                        ax.arrow(px_c - s_c*hl, py_c + c_c*hl, s_c*hl*0.8, -c_c*hl*0.8, head_width=0.08, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
-
-                ax.text(hx1, hy1+0.2, f"{w1}", color='blue', fontsize=6, ha='center')
-                ax.text(hx2, hy2+0.2, f"{w2}", color='blue', fontsize=6, ha='center')
-    else:
-        applied_w = kwargs.get('applied_w', 0)
-        if applied_w > 0.1:
-            max_y = max([n[1] for n in nodes])
-            scale_h = 1.0
-            for el in elements:
-                if el['type'] == 'frame' and el['group'] == 'segment':
-                    n1, n2 = nodes[el['n1']], nodes[el['n2']]
-                    x1, y1 = n1[0], n1[1]
-                    x2, y2 = n2[0], n2[1]
-                    h = scale_h
-                    poly = Polygon([(x1,y1), (x1, y1+h), (x2, y2+h), (x2, y2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2)
-                    ax.add_patch(poly)
-                    dx, dy = x2-x1, y2-y1
-                    num_arr = max(2, int(np.hypot(dx, dy) / 0.5))
-                    for i in range(1, num_arr):
-                        fx, fy = x1 + dx*(i/num_arr), y1 + dy*(i/num_arr)
-                        ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
+            ax.add_patch(Polygon([(px1,py1), (hx1,hy1), (hx2,hy2), (px2,py2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2))
             
-            mid_x = sum([n[0] for n in nodes])/len(nodes)
-            ax.text(mid_x, max_y + scale_h + 0.3, f"{applied_w:.2f} kN/m", color='blue', fontsize=9, fontweight='bold', ha='center')
+            # أسهم تظليل داخلية
+            num_arrows = max(2, int(np.hypot(px2-px1, py2-py1) / 0.5))
+            for k in range(1, num_arrows):
+                frac = k / num_arrows
+                s_curr = ld['start'] + frac * (ld['end'] - ld['start'])
+                w_curr = w1 + frac * (w2 - w1)
+                px_c, py_c, th_c = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], s_curr)
+                hl = w_curr * scale_ld
+                if ld['dir'] == 'Gravity (Vertical ↓)':
+                    ax.arrow(px_c, py_c + hl, 0, -hl*0.8, head_width=0.08, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
+                else:
+                    c_c, s_c = np.cos(th_c), np.sin(th_c)
+                    ax.arrow(px_c - s_c*hl, py_c + c_c*hl, s_c*hl*0.8, -c_c*hl*0.8, head_width=0.08, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
 
-    for i, n in enumerate(nodes):
-        if any(el['n1'] == i or el['n2'] == i for el in elements if el['type'] == 'frame'):
-            ax.plot(n[0], n[1], 'ko', markersize=2)
+            ax.text(hx1, hy1+0.2, f"{w1}", color='blue', fontsize=6, ha='center')
+            ax.text(hx2, hy2+0.2, f"{w2}", color='blue', fontsize=6, ha='center')
 
-def draw_live_preview(nodes, elements, supports_list, shape_mode, **kwargs):
-    mpl.rcParams['font.family'] = 'sans-serif'
-    mpl.rcParams['font.sans-serif'] = ['Arial']
+def draw_live_preview(nodes, elements, supports_list, sec_name, loads, segments, seg_starts):
+    apply_plot_styles()
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
-    draw_loads_and_geometry(ax, nodes, elements, supports_list, shape_mode, **kwargs)
+    draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads, segments, seg_starts)
     return safe_render_fig(fig)
 
-def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list, shape_mode, **kwargs):
-    mpl.rcParams['font.family'] = 'sans-serif'
-    mpl.rcParams['font.sans-serif'] = ['Arial']
+def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list, sec_name, loads, segments, seg_starts):
+    apply_plot_styles()
     figs_dict = {}
     
     # 0. Load Diagram
-    fig_ld, ax_ld = plt.subplots(figsize=(8, 4))
+    fig_ld, ax_ld = plt.subplots(figsize=(6, 5))
     ax_ld.set_aspect('equal', adjustable='datalim')
     ax_ld.axis('off')
-    draw_loads_and_geometry(ax_ld, nodes, elements, supports_list, shape_mode, **kwargs)
+    draw_loads_and_geometry(ax_ld, nodes, elements, supports_list, sec_name, loads, segments, seg_starts)
     figs_dict['Load'] = safe_render_fig(fig_ld)
     
     # 1. Reactions
-    fig_r, ax_r = plt.subplots(figsize=(8, 4))
+    fig_r, ax_r = plt.subplots(figsize=(6, 5))
     ax_r.set_aspect('equal', adjustable='datalim')
     ax_r.axis('off')
     draw_base_geometry(ax_r, nodes, elements, supports_list)
     
     for sup in supports_list:
         n = sup['node']
+        t = sup['type']
+        a = sup['angle']
         Rx, Ry = R_reactions[3*n], R_reactions[3*n+1]
         x, y = nodes[n][0], nodes[n][1]
-        if abs(Ry) > 0.1:
-            arr_c = 'blue' if Ry > 0 else 'red'
-            sgn = 1 if Ry > 0 else -1
-            ax_r.plot([x, x], [y - sgn*0.8, y], color=arr_c, lw=1.0)
-            ax_r.plot([x-0.15, x, x+0.15], [y-sgn*0.2, y, y-sgn*0.2], color=arr_c, lw=1.0)
-            ax_r.text(x, y - sgn*1.0, f"{abs(Ry):.1f}", color='black', fontsize=8, ha='center', va='center')
-            
-        if abs(Rx) > 0.1:
-            arr_c = 'blue' if Rx > 0 else 'red'
-            sgn = 1 if Rx > 0 else -1
-            ax_r.plot([x - sgn*0.8, x], [y, y], color=arr_c, lw=1.0)
-            ax_r.plot([x-sgn*0.2, x, x-sgn*0.2], [y-0.15, y, y+0.15], color=arr_c, lw=1.0)
-            ax_r.text(x - sgn*1.0, y, f"{abs(Rx):.1f}", color='black', fontsize=8, ha='center', va='center')
+        
+        rad = np.radians(a)
+        c_a, s_a = np.cos(rad), np.sin(rad)
+        R_u = Rx * c_a + Ry * s_a
+        R_v = -Rx * s_a + Ry * c_a
+        
+        if t == 'Roller':
+            draw_reaction_arrow(ax_r, x, y, R_v, -s_a, c_a)
+        else:
+            draw_reaction_arrow(ax_r, x, y, R_u, c_a, s_a)
+            draw_reaction_arrow(ax_r, x, y, R_v, -s_a, c_a)
             
     figs_dict['React'] = safe_render_fig(fig_r)
     
     # 2. Internal Forces (Decluttered)
     def create_force_plot(val_key, scale, c_pos, c_neg):
-        fig_f, ax_f = plt.subplots(figsize=(8, 4))
+        fig_f, ax_f = plt.subplots(figsize=(6, 5))
         ax_f.set_aspect('equal', adjustable='datalim')
         ax_f.axis('off')
         draw_base_geometry(ax_f, nodes, elements, supports_list)
@@ -540,7 +536,7 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list, s
     figs_dict['M'] = create_force_plot('M', scales['M'], 'blue', 'red')
     
     # 3. Deflection
-    fig_d, ax_d = plt.subplots(figsize=(8, 4))
+    fig_d, ax_d = plt.subplots(figsize=(6, 5))
     ax_d.set_aspect('equal', adjustable='datalim')
     ax_d.axis('off')
     draw_base_geometry(ax_d, nodes, elements, supports_list)
@@ -563,6 +559,10 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list, s
 
     return figs_dict
 
+def reset_adv_state():
+    if 'adv_solved' in st.session_state:
+        st.session_state.adv_solved = False
+
 # =========================================================
 # 4. Main Streamlit UI (The Hybrid Builder)
 # =========================================================
@@ -570,53 +570,56 @@ def render_advanced_shape_module():
     st.markdown("## 🎢 The Chain Builder (Multi-Segment & Curved Shapes)")
     st.info("💡 **Hybrid System:** Build complex paths by chaining Straight Lines and Arcs together. Loads and Struts map perfectly to the path length (Arc Length).")
     
+    if 'adv_solved' not in st.session_state:
+        st.session_state.adv_solved = False
+
     c_in, c_plot = st.columns([1.2, 1])
     
     with c_in:
         st.markdown("### 1. Chain Segments Definition")
-        num_segs = st.number_input("Number of Segments in Chain", min_value=1, max_value=10, value=2)
+        num_segs = st.number_input("Number of Segments in Chain", min_value=1, max_value=10, value=1, on_change=reset_adv_state)
         
         segments = []
         for i in range(int(num_segs)):
             with st.expander(f"⚙️ Segment {i+1}", expanded=True):
-                s_type = st.radio(f"Shape Type", ["Straight Line", "Curve (Arc & Radius)", "Curve (Chord & Rise)"], key=f"t_{i}", horizontal=True)
+                s_type = st.radio(f"Shape Type", ["Straight Line", "Curve (Arc & Radius)", "Curve (Chord & Rise)"], key=f"t_{i}", horizontal=True, on_change=reset_adv_state)
                 
                 smooth = True
                 start_angle = 0.0
                 if i == 0:
-                    start_angle = st.number_input("Starting Angle (°)", value=45.0 if s_type=="Straight Line" else 0.0, step=5.0, key=f"sa_{i}")
+                    start_angle = st.number_input("Starting Angle (°)", value=60.0 if s_type=="Straight Line" else 0.0, step=5.0, key=f"sa_{i}", on_change=reset_adv_state)
                     smooth = False
                 else:
-                    smooth = st.checkbox("Smooth Connection (Tangent to previous)", value=True, key=f"sm_{i}")
+                    smooth = st.checkbox("Smooth Connection (Tangent to previous)", value=True, key=f"sm_{i}", on_change=reset_adv_state)
                     if not smooth:
-                        start_angle = st.number_input("New Starting Angle (°)", value=0.0, step=5.0, key=f"sa_{i}")
+                        start_angle = st.number_input("New Starting Angle (°)", value=0.0, step=5.0, key=f"sa_{i}", on_change=reset_adv_state)
 
                 if s_type == "Straight Line":
-                    L = st.number_input("Length (L) (m)", value=2.0, step=0.5, key=f"l_{i}")
+                    L = st.number_input("Length (L) (m)", value=3.0, step=0.5, key=f"l_{i}", on_change=reset_adv_state)
                     kappa = 0.0
                 elif s_type == "Curve (Arc & Radius)":
-                    r_val = st.number_input("Radius (R) (m)", value=5.0, step=0.5, key=f"r_{i}")
-                    L = st.number_input("Arc Length (S) (m)", value=3.0, step=0.5, key=f"al_{i}")
-                    dir_crv = st.selectbox("Curvature Direction", ["Arching Down ⤵ (Convex)", "Arching Up ⤴ (Concave)"], key=f"d_{i}")
+                    r_val = st.number_input("Radius (R) (m)", value=5.0, step=0.5, key=f"r_{i}", on_change=reset_adv_state)
+                    L = st.number_input("Arc Length (S) (m)", value=3.0, step=0.5, key=f"al_{i}", on_change=reset_adv_state)
+                    dir_crv = st.selectbox("Curvature Direction", ["Arching Down ⤵ (Convex)", "Arching Up ⤴ (Concave)"], key=f"d_{i}", on_change=reset_adv_state)
                     kappa = -1.0/r_val if "Down" in dir_crv else 1.0/r_val
                 else:
-                    L_c = st.number_input("Chord Length (m)", value=4.0, step=0.5, key=f"c_{i}")
-                    h = st.number_input("Rise (m)", value=1.0, step=0.1, key=f"h_{i}")
+                    L_c = st.number_input("Chord Length (m)", value=4.0, step=0.5, key=f"c_{i}", on_change=reset_adv_state)
+                    h = st.number_input("Rise (m)", value=1.0, step=0.1, key=f"h_{i}", on_change=reset_adv_state)
                     if h <= 0: h = 0.01
                     r_val = (L_c**2)/(8*h) + (h/2)
                     L = 2 * r_val * np.arcsin(L_c / (2*r_val))
-                    dir_crv = st.selectbox("Curvature Direction", ["Arching Down ⤵ (Convex)", "Arching Up ⤴ (Concave)"], key=f"d2_{i}")
+                    dir_crv = st.selectbox("Curvature Direction", ["Arching Down ⤵ (Convex)", "Arching Up ⤴ (Concave)"], key=f"d2_{i}", on_change=reset_adv_state)
                     kappa = -1.0/r_val if "Down" in dir_crv else 1.0/r_val
                     st.info(f"💡 Calculated Arc Length = {L:.2f} m | Radius = {r_val:.2f} m")
                 
                 segments.append({'type': s_type, 'L': L, 'kappa': kappa, 'smooth': smooth, 'start_angle': start_angle})
 
         st.markdown("### 2. Properties & Sections")
-        sec_source = st.radio("Section Type:", ["Standard Profile Database", "Custom 2-Plates Steel", "Custom Input Properties"], horizontal=True)
+        sec_source = st.radio("Section Type:", ["Standard Profile Database", "Custom 2-Plates Steel", "Custom Input Properties"], horizontal=True, on_change=reset_adv_state)
         
         if sec_source == "Standard Profile Database":
             sec_list = list(SECTIONS_DB.keys()) if SECTIONS_DB else ["Soldier U100"]
-            sec_name = st.selectbox("Profile Section", sec_list)
+            sec_name = st.selectbox("Profile Section", sec_list, on_change=reset_adv_state)
             raw = SECTIONS_DB.get(sec_name, {})
             s_E = raw.get('E', 2100.0)
             s_A = raw.get('A', raw.get('A_cm2', 34.3) / 10000.0)
@@ -625,127 +628,157 @@ def render_advanced_shape_module():
             
         elif sec_source == "Custom 2-Plates Steel":
             cp1, cp2 = st.columns(2)
-            p_height = cp1.number_input("Plates Depth / Height (mm)", value=300.0, step=10.0)
-            p_thick = cp2.number_input("Plate Thickness (mm)", value=10.0, step=1.0)
+            p_height = cp1.number_input("Plates Depth / Height (mm)", value=300.0, step=10.0, on_change=reset_adv_state)
+            p_thick = cp2.number_input("Plate Thickness (mm)", value=10.0, step=1.0, on_change=reset_adv_state)
             A_m2 = 2 * (p_height * p_thick) / 1000000.0
             I_cm4 = 2 * (p_thick * (p_height**3) / 12.0) / 10000.0
-            m_all = st.number_input("Allowable Moment (kN.m)", value=30.0)
-            v_all = st.number_input("Allowable Shear (kN)", value=150.0)
+            m_all = st.number_input("Allowable Moment (kN.m)", value=30.0, on_change=reset_adv_state)
+            v_all = st.number_input("Allowable Shear (kN)", value=150.0, on_change=reset_adv_state)
             sec_props = {'name': f"2 Plates ({int(p_height)}x{int(p_thick)}mm)", 'E': 2100.0, 'A': A_m2, 'I': I_cm4, 'Mall': m_all, 'Qall': v_all}
             st.success(f"⚙️ Calculated Area = {A_m2*1000000:.1f} mm² | Inertia (Ixx) = {I_cm4:.1f} cm⁴")
             
         else:
             cp1, cp2, cp3 = st.columns(3)
-            A_val = cp1.number_input("Area (cm²)", value=34.3) / 10000.0
-            I_val = cp2.number_input("Inertia Ixx (cm⁴)", value=412.0)
-            Z_val = cp3.number_input("Section Modulus Z (cm³)", value=82.0)
-            m_all = st.number_input("Allowable Moment (kN.m)", value=13.1)
-            v_all = st.number_input("Allowable Shear (kN)", value=100.8)
+            A_val = cp1.number_input("Area (cm²)", value=34.3, on_change=reset_adv_state) / 10000.0
+            I_val = cp2.number_input("Inertia Ixx (cm⁴)", value=412.0, on_change=reset_adv_state)
+            Z_val = cp3.number_input("Section Modulus Z (cm³)", value=82.0, on_change=reset_adv_state)
+            m_all = st.number_input("Allowable Moment (kN.m)", value=13.1, on_change=reset_adv_state)
+            v_all = st.number_input("Allowable Shear (kN)", value=100.8, on_change=reset_adv_state)
             sec_props = {'name': "Custom Section", 'E': 2100.0, 'A': A_val, 'I': I_val, 'Mall': m_all, 'Qall': v_all}
 
         st.markdown("### 3. Applied Loads")
-        num_loads = st.number_input("Count of Loads", 1, 10, 1)
+        num_loads = st.number_input("Count of Loads", 1, 10, 1, on_change=reset_adv_state)
         loads_data = []
         for i in range(int(num_loads)):
             st.write(f"**Load {i+1}:**")
             lc1, lc2, lc3 = st.columns(3)
-            s_idx = lc1.selectbox("On Segment No.", range(1, int(num_segs)+1), key=f"ld_s_{i}") - 1
-            l_type = lc2.selectbox("Type", ["Uniform", "Trapezoidal", "Point Load"], key=f"ld_t_{i}")
-            l_dir = lc3.selectbox("Direction", ["Gravity (Vertical ↓)", "Perpendicular (Local ↘)"], key=f"ld_d_{i}")
+            s_idx = lc1.selectbox("On Segment No.", range(1, int(num_segs)+1), key=f"ld_s_{i}", on_change=reset_adv_state) - 1
+            l_type = lc2.selectbox("Type", ["Uniform", "Trapezoidal", "Point Load"], key=f"ld_t_{i}", on_change=reset_adv_state)
+            l_dir = lc3.selectbox("Direction", ["Gravity (Vertical ↓)", "Perpendicular (Local ↘)"], key=f"ld_d_{i}", on_change=reset_adv_state)
             
             sc1, sc2, sc3 = st.columns(3)
             max_s = float(segments[s_idx]['L'])
-            start = sc1.number_input("Start Arc Dist (m)", 0.0, max_s, 0.0, key=f"ld_st_{i}")
-            w1 = sc2.number_input("Value W1 (kN/m or kN)", value=15.0, key=f"ld_w1_{i}")
+            start = sc1.number_input("Start Arc Dist (m)", 0.0, max_s, 0.0, key=f"ld_st_{i}", on_change=reset_adv_state)
+            w1 = sc2.number_input("Value W1 (kN/m or kN)", value=15.0, key=f"ld_w1_{i}", on_change=reset_adv_state)
             
             if l_type == "Uniform":
-                end = sc3.number_input("End Arc Dist (m)", 0.0, max_s, max_s, key=f"ld_en_{i}")
+                end = sc3.number_input("End Arc Dist (m)", 0.0, max_s, max_s, key=f"ld_en_{i}", on_change=reset_adv_state)
                 w2 = w1
             elif l_type == "Trapezoidal":
-                end = sc3.number_input("End Arc Dist (m)", 0.0, max_s, max_s, key=f"ld_en_{i}")
-                w2 = st.number_input("Value W2 (kN/m)", value=5.0, key=f"ld_w2_{i}")
+                end = sc3.number_input("End Arc Dist (m)", 0.0, max_s, max_s, key=f"ld_en_{i}", on_change=reset_adv_state)
+                w2 = st.number_input("Value W2 (kN/m)", value=5.0, key=f"ld_w2_{i}", on_change=reset_adv_state)
             else:
                 end = start; w2 = w1
                 
             loads_data.append({'seg_idx': s_idx, 'type': l_type, 'dir': l_dir, 'start': start, 'end': end, 'w1': w1, 'w2': w2})
 
         st.markdown("### 4. Struts (Push-Pulls)")
-        num_struts = st.number_input("Count of Struts", 0, 10, 1)
+        num_struts = st.number_input("Count of Struts", 0, 10, 1, on_change=reset_adv_state)
         struts_data = []
         strut_opts = list(STRUTS_DB.keys()) if STRUTS_DB else ["PPH 353"]
         for i in range(int(num_struts)):
             st.write(f"**Strut {i+1}:**")
             cc1, cc2, cc3, cc4 = st.columns(4)
-            s_idx = cc1.selectbox("On Seg No.", range(1, int(num_segs)+1), key=f"st_s_{i}") - 1
-            dist = cc2.number_input("Arc Dist from Seg Start (m)", 0.0, float(segments[s_idx]['L']), float(segments[s_idx]['L'])/2, key=f"st_d_{i}")
-            gx = cc3.number_input("Ground X (m)", value=3.0, step=0.5, key=f"st_gx_{i}")
-            st_sec = cc4.selectbox("Strut Type", strut_opts, key=f"st_sec_{i}")
+            s_idx = cc1.selectbox("On Seg No.", range(1, int(num_segs)+1), key=f"st_s_{i}", on_change=reset_adv_state) - 1
+            dist = cc2.number_input("Arc Dist from Seg Start (m)", 0.0, float(segments[s_idx]['L']), float(segments[s_idx]['L'])/2, key=f"st_d_{i}", on_change=reset_adv_state)
+            gx = cc3.number_input("Ground X (m)", value=3.0, step=0.5, key=f"st_gx_{i}", on_change=reset_adv_state)
+            st_sec = cc4.selectbox("Strut Type", strut_opts, key=f"st_sec_{i}", on_change=reset_adv_state)
             struts_data.append({'seg_idx': s_idx, 's_dist': dist, 'gx': gx, 'sec': st_sec})
 
         st.markdown("### 5. Supports & Base System")
         bs1, bs2 = st.columns(2)
         base_sec_list = ["Soldier U100", "None (Direct to Ground)"]
-        base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=1)
+        base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=1, on_change=reset_adv_state)
         
-        c_sup = st.selectbox("Corner Support (Seg 1 Start)", ["Hinged", "Roller", "Fixed"])
-        # 💡 زاوية الركيزة هنا أصبحت مرتبطة بالرسم وتدور مع المثلث
-        c_ang = st.number_input("Corner Angle (°)", value=0.0, step=15.0)
+        c_sup = st.selectbox("Corner Support (Seg 1 Start)", ["Hinged", "Roller", "Fixed"], on_change=reset_adv_state)
+        c_ang = st.number_input("Corner Angle (°)", value=0.0, step=15.0, on_change=reset_adv_state)
         
-        num_base_sups = st.number_input("Additional Ground Supports", 0, 10, 1)
+        num_base_sups = st.number_input("Additional Ground Supports", 0, 10, 1, on_change=reset_adv_state)
         base_sups = []
         for i in range(int(num_base_sups)):
             sp1, sp2 = st.columns(2)
-            sx = sp1.number_input(f"Sup {i+1} X (m)", value=float(i+1)*2.0)
-            styp = sp2.selectbox(f"Sup {i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}")
+            sx = sp1.number_input(f"Sup {i+1} X (m)", value=float(i+1)*2.0, on_change=reset_adv_state)
+            styp = sp2.selectbox(f"Sup {i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}", on_change=reset_adv_state)
             base_sups.append({'x': sx, 'type': styp})
 
     # Generate Mesh Live Preview
     nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, sec_props, loads_data, struts_data, base_sec, base_sups, {'type': c_sup, 'angle': c_ang})
 
     with c_plot:
-        st.markdown("<h4 style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px;'>Live Geometry & Loads</h4>", unsafe_allow_html=True)
-        live_img = draw_live_preview(nodes, elements, supports_list, "🔗 Multi-Segment (Polygonal)", loads=loads_data, segments=segments, seg_starts=seg_starts)
+        st.markdown("<h4 style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial;'>Live Geometry & Loads</h4>", unsafe_allow_html=True)
+        live_img = draw_live_preview(nodes, elements, supports_list, sec_props['name'], loads=loads_data, segments=segments, seg_starts=seg_starts)
         st.image(live_img, use_container_width=True)
 
     st.markdown("---")
     
-    if st.button("🚀 Run Advanced Chain Analysis", type="primary", use_container_width=True):
-        with st.spinner("Generating Matrix & Solving..."):
-            U, R = solve_fea_engine(nodes, elements, nodal_loads, supports_list)
+    col_btn, col_blank = st.columns([1.5, 2.5])
+    with col_btn:
+        if st.button("🚀 Run Advanced Chain Analysis", type="primary", use_container_width=True):
+            with st.spinner("Generating Matrix & Solving..."):
+                U, R = solve_fea_engine(nodes, elements, nodal_loads, supports_list)
+                st.session_state.adv_fea_data = {
+                    'U': U, 'R': R, 'nodes': nodes, 'elements': elements,
+                    'supports_list': supports_list, 'sec_props': sec_props,
+                    'loads_data': loads_data, 'segments': segments, 'seg_starts': seg_starts
+                }
+                st.session_state.adv_solved = True
             st.success("✅ Analysis Complete!")
             
-            st.markdown("### 🎛️ Diagram Scales")
+    if st.session_state.adv_solved:
+        st.markdown("### 🎛️ Analysis Results & Diagrams")
+        fea_data = st.session_state.adv_fea_data
+        
+        with st.expander("⚙️ Diagram Scale Controls", expanded=True):
             c_s1, c_s2, c_s3 = st.columns(3)
             sc_n = c_s1.slider("Axial Scale", 0.001, 0.100, 0.015, step=0.001)
             sc_v = c_s2.slider("Shear Scale", 0.001, 0.100, 0.015, step=0.001)
             sc_m = c_s3.slider("Moment Scale", 0.001, 0.100, 0.015, step=0.001)
             
-            img_bufs = plot_sap2000_diagrams(nodes, elements, R, {'N': sc_n, 'V': sc_v, 'M': sc_m}, supports_list, "🔗 Multi-Segment (Polygonal)", loads=loads_data, segments=segments, seg_starts=seg_starts)
-            
-            # 💡 التوزيع الجديد 3×2 ليكون متطابقاً مع الصورة 3
-            c_p1, c_p2, c_p3 = st.columns(3)
-            c_p1.image(img_bufs['Load'], caption="Assigned Load Diagram")
-            c_p2.image(img_bufs['React'], caption="Reactions Diagram (kN)")
-            c_p3.image(img_bufs['N'], caption="Axial Force Diagram (kN)")
-            
-            c_p4, c_p5, c_p6 = st.columns(3)
-            c_p4.image(img_bufs['V'], caption="Shear Force Diagram (kN)")
-            c_p5.image(img_bufs['M'], caption="Bending Moment Diagram (kN.m)")
-            c_p6.image(img_bufs['D'], caption="Deflection Deformed Shape")
-            
-            # --- Safety Checks Quick Table ---
-            max_m, max_v = 0.0, 0.0
-            for el in elements:
-                if el['group'] == 'segment':
-                    max_m = max(max_m, np.max(np.abs(el['internal']['M'])))
-                    max_v = max(max_v, np.max(np.abs(el['internal']['V'])))
-                    
-            st.markdown("### 📊 Safety Summary")
-            df = pd.DataFrame([
-                {"Component": sec_props['name'], "Force Type": "Bending Moment", "Actual": f"{max_m:.2f} kN.m", "Allowable": f"{sec_props['Mall']:.2f} kN.m", "Status": "SAFE" if max_m <= sec_props['Mall'] else "UNSAFE"},
-                {"Component": sec_props['name'], "Force Type": "Shear Force", "Actual": f"{max_v:.2f} kN", "Allowable": f"{sec_props['Qall']:.2f} kN", "Status": "SAFE" if max_v <= sec_props['Qall'] else "UNSAFE"}
-            ])
-            st.table(df)
+        img_bufs = plot_sap2000_diagrams(
+            fea_data['nodes'], fea_data['elements'], fea_data['R'], 
+            {'N': sc_n, 'V': sc_v, 'M': sc_m}, fea_data['supports_list'], 
+            fea_data['sec_props']['name'], loads=fea_data['loads_data'], 
+            segments=fea_data['segments'], seg_starts=fea_data['seg_starts']
+        )
+        
+        titles = {
+            'Load': "Assigned Load Diagram",
+            'React': "Reactions Diagram (kN)",
+            'N': "Axial Force Diagram (kN)",
+            'V': "Shear Force Diagram (kN)",
+            'M': "Bending Moment Diagram (kN.m)",
+            'D': "Deflection Deformed Shape"
+        }
+        
+        c_p1, c_p2, c_p3 = st.columns(3)
+        c_p1.image(img_bufs['Load'], use_container_width=True)
+        c_p1.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['Load']}</p>", unsafe_allow_html=True)
+        c_p2.image(img_bufs['React'], use_container_width=True)
+        c_p2.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['React']}</p>", unsafe_allow_html=True)
+        c_p3.image(img_bufs['N'], use_container_width=True)
+        c_p3.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['N']}</p>", unsafe_allow_html=True)
+        
+        c_p4, c_p5, c_p6 = st.columns(3)
+        c_p4.image(img_bufs['V'], use_container_width=True)
+        c_p4.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['V']}</p>", unsafe_allow_html=True)
+        c_p5.image(img_bufs['M'], use_container_width=True)
+        c_p5.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['M']}</p>", unsafe_allow_html=True)
+        c_p6.image(img_bufs['D'], use_container_width=True)
+        c_p6.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['D']}</p>", unsafe_allow_html=True)
+        
+        # --- Safety Checks Quick Table ---
+        max_m, max_v = 0.0, 0.0
+        for el in fea_data['elements']:
+            if el['group'] == 'segment':
+                max_m = max(max_m, np.max(np.abs(el['internal']['M'])))
+                max_v = max(max_v, np.max(np.abs(el['internal']['V'])))
+                
+        st.markdown("### 📊 Safety Summary")
+        df = pd.DataFrame([
+            {"Component": fea_data['sec_props']['name'], "Force Type": "Bending Moment", "Actual": f"{max_m:.2f} kN.m", "Allowable": f"{fea_data['sec_props']['Mall']:.2f} kN.m", "Status": "SAFE" if max_m <= fea_data['sec_props']['Mall'] else "UNSAFE"},
+            {"Component": fea_data['sec_props']['name'], "Force Type": "Shear Force", "Actual": f"{max_v:.2f} kN", "Allowable": f"{fea_data['sec_props']['Qall']:.2f} kN", "Status": "SAFE" if max_v <= fea_data['sec_props']['Qall'] else "UNSAFE"}
+        ])
+        st.table(df)
 
 if __name__ == "__main__":
     render_advanced_shape_module()
