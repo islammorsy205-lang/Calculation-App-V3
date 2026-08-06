@@ -8,6 +8,11 @@ import os
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
+from docx import Document
+from docx.shared import Cm, Pt, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml import OxmlElement, parse_xml
+from docx.oxml.ns import nsdecls, qn
 
 try:
     from config import SECTIONS_DB, STRUTS_DB
@@ -20,15 +25,11 @@ except ImportError:
 # =========================================================
 
 def get_parametric_point(x0, y0, th0, kappa, s):
-    """
-    يحسب إحداثيات (X, Y) وزاوية المماس لأي نقطة على الخط أو الكيرف
-    بدلالة طول المسار (s) والانحناء (kappa).
-    """
-    if abs(kappa) < 1e-6: # خط مستقيم
+    if abs(kappa) < 1e-6: 
         x = x0 + s * np.cos(th0)
         y = y0 + s * np.sin(th0)
         th = th0
-    else: # كيرف
+    else: 
         x = x0 + (np.sin(th0 + kappa * s) - np.sin(th0)) / kappa
         y = y0 - (np.cos(th0 + kappa * s) - np.cos(th0)) / kappa
         th = th0 + kappa * s
@@ -47,14 +48,11 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
         nodes.append([x, y])
         return len(nodes) - 1
 
-    # 1. بناء الشكل الهندسي (Segments Chain)
-    seg_start_data = [] # لحفظ نقط بداية كل قطعة
-    
+    seg_start_data = [] 
     curr_x, curr_y = 0.0, 0.0
-    curr_th = np.radians(corner_sup.get('angle', 0.0)) # زاوية البداية الكلية
+    curr_th = np.radians(corner_sup.get('angle', 0.0)) 
     
     for i, seg in enumerate(segments):
-        # لو المستخدم طلب كسر (ليس Smooth) نأخذ زاويته، غير كده نكمل من المماس القديم
         if i == 0 or not seg.get('smooth', True):
             curr_th = np.radians(seg['start_angle'])
             
@@ -62,7 +60,6 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
         kappa = seg['kappa']
         seg_start_data.append({'x0': curr_x, 'y0': curr_y, 'th0': curr_th, 'kappa': kappa})
         
-        # تجميع النقط الرئيسية (مسافات القوس s)
         keys = [0.0, L]
         for st_item in struts:
             if st_item['seg_idx'] == i: keys.append(st_item['s_dist'])
@@ -71,19 +68,16 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
                 keys.append(ld['start'])
                 keys.append(ld['end'])
         
-        # إضافة نقط للرسم الناعم (Discretization) كل 0.25 متر
         num_sub = max(1, int(np.ceil(L / 0.25)))
         for p in np.linspace(0, L, num_sub+1): keys.append(p)
             
         keys = sorted(list(set([round(k, 4) for k in keys if 0 <= k <= L + 1e-5])))
         
-        # تحويل مسافات القوس (s) إلى إحداثيات (X, Y)
         node_indices = []
         for s_val in keys:
             px, py, _ = get_parametric_point(curr_x, curr_y, curr_th, kappa, s_val)
             node_indices.append(get_or_add_node(px, py))
             
-        # إنشاء العناصر بين النقط
         for j in range(len(keys)-1):
             n1, n2 = node_indices[j], node_indices[j+1]
             s_mid = (keys[j] + keys[j+1]) / 2.0
@@ -91,7 +85,6 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
             
             p_x1, p_y1, p_x2, p_y2 = 0.0, 0.0, 0.0, 0.0
             
-            # توقيع الأحمال الموزعة
             for ld in loads:
                 if ld['seg_idx'] == i and ld['type'] != 'Point Load':
                     if ld['start'] - 1e-4 <= s_mid <= ld['end'] + 1e-4:
@@ -101,7 +94,7 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
                         
                         if ld['dir'] == 'Gravity (Vertical ↓)':
                             p_y1 -= wa; p_y2 -= wb
-                        else: # عمودي على المماس
+                        else: 
                             c_t, s_t = np.cos(th_mid), np.sin(th_mid)
                             p_x1 += wa * s_t; p_y1 -= wa * c_t
                             p_x2 += wb * s_t; p_y2 -= wb * c_t
@@ -113,7 +106,6 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
                 'seg_idx': i
             })
             
-        # توقيع الأحمال المركزة
         for ld in loads:
             if ld['seg_idx'] == i and ld['type'] == 'Point Load':
                 try:
@@ -127,10 +119,8 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
                         nodal_loads.append({'node': nid, 'Fx': ld['w1']*s_t, 'Fy': -ld['w1']*c_t})
                 except ValueError: pass
                 
-        # تحديث نقطة البداية والمماس للقطعة القادمة
         curr_x, curr_y, curr_th = get_parametric_point(curr_x, curr_y, curr_th, kappa, L)
 
-    # 2. الأرضية أو الكمرة السفلية
     base_x_pts = [0.0]
     for n in nodes: base_x_pts.append(n[0])
     for st_item in struts: base_x_pts.append(st_item['gx'])
@@ -153,7 +143,6 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
                 'I': b_props.get('I', b_props.get('I_cm4', 412.0)) / 100000000.0
             })
 
-    # 3. النهايز
     for st_item in struts:
         seg_idx = st_item['seg_idx']
         dist = st_item['s_dist']
@@ -171,7 +160,6 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
             'E': 21000000.0, 'A': 0.001
         })
 
-    # 4. الركائز
     supports_list = []
     supports_list.append({'node': 0, 'type': corner_sup['type'], 'angle': corner_sup['angle']})
     for sup in supports:
@@ -323,89 +311,164 @@ def safe_render_fig(fig):
 
 def draw_base_geometry(ax, nodes, elements, supports_list):
     for el in elements:
-        if 'L' not in el: continue
-        if el['group'] == 'base' and el['sec'] == "None (Direct to Ground)": continue
+        if 'L' not in el and el['type'] != 'truss': continue
         n1, n2 = nodes[el['n1']], nodes[el['n2']]
-        color = 'black' if el['type'] == 'frame' else 'gray'
-        style = '-' if el['type'] == 'frame' else '--'
-        ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color=color, linestyle=style, linewidth=1.5, zorder=1)
-        
+        if el['type'] == 'truss':
+            ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
+            # 💡 إضافة اسم الناهز في نص الخط (PPH 353 مثلاً)
+            mid_x, mid_y = (n1[0]+n2[0])/2, (n1[1]+n2[1])/2
+            dx, dy = n2[0]-n1[0], n2[1]-n1[1]
+            rot = np.degrees(np.arctan2(dy, dx))
+            L_hyp = np.hypot(dx, dy)
+            if L_hyp > 1e-4:
+                nx_s, ny_s = -dy/L_hyp, dx/L_hyp
+                ax.text(mid_x + nx_s*0.2, mid_y + ny_s*0.2, el.get('sec', ''), color='black', fontsize=6, rotation=rot, ha='center', va='center')
+        else:
+            if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
+            ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
+            
     for sup in supports_list:
         n = sup['node']
         x, y = nodes[n][0], nodes[n][1]
         t = sup['type']
+        a = sup.get('angle', 0.0)
+        
+        # 💡 تمثيل دوران الركيزة رياضياً بناءً على الزاوية
+        rad = np.radians(a)
+        nx, ny = np.sin(rad), -np.cos(rad) 
+        tx, ty = -ny, nx 
+        
         if t == 'Fixed':
             ax.plot(x, y, marker='s', markerfacecolor='none', markeredgecolor='limegreen', markersize=6, zorder=5)
-            ax.plot([x - 0.2, x + 0.2], [y - 0.2, y - 0.2], color='limegreen', lw=2, zorder=4)
+            ax.plot([x - 0.2*tx, x + 0.2*tx], [y - 0.2*ty, y + 0.2*ty], color='limegreen', lw=2, zorder=4)
         elif t == 'Hinged':
-            ax.add_patch(Polygon([(x,y), (x+0.2,y-0.3), (x-0.2,y-0.3)], facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
-            ax.plot([x-0.3, x+0.3], [y-0.3, y-0.3], color='limegreen', lw=1.5, zorder=4)
+            h, w = 0.3, 0.2
+            p1 = (x, y)
+            p2 = (x + h*nx + w*tx, y + h*ny + w*ty)
+            p3 = (x + h*nx - w*tx, y + h*ny - w*ty)
+            ax.add_patch(Polygon([p1, p2, p3], facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
+            ax.plot([p2[0]+0.1*tx, p3[0]-0.1*tx], [p2[1]+0.1*ty, p3[1]-0.1*ty], color='limegreen', lw=1.5, zorder=4)
         elif t == 'Roller':
-            ax.add_patch(Polygon([(x,y), (x+0.2,y-0.3), (x-0.2,y-0.3)], facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
-            ax.add_patch(plt.Circle((x, y-0.38), 0.08, facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
-            ax.plot([x-0.3, x+0.3], [y-0.46, y-0.46], color='limegreen', lw=1.5, zorder=4)
+            h, w, r = 0.25, 0.15, 0.08
+            p1 = (x, y)
+            p2 = (x + h*nx + w*tx, y + h*ny + w*ty)
+            p3 = (x + h*nx - w*tx, y + h*ny - w*ty)
+            ax.add_patch(Polygon([p1, p2, p3], facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
+            circ_x, circ_y = x + (h + r)*nx, y + (h + r)*ny
+            ax.add_patch(plt.Circle((circ_x, circ_y), r, facecolor='none', edgecolor='limegreen', lw=1.2, zorder=5))
+            base_dist = h + 2*r
+            line_w = 0.15
+            lx1, ly1 = x + base_dist*nx - line_w*tx, y + base_dist*ny - line_w*ty
+            lx2, ly2 = x + base_dist*nx + line_w*tx, y + base_dist*ny + line_w*ty
+            ax.plot([lx1, lx2], [ly1, ly2], color='limegreen', lw=1.5, zorder=4)
 
-def draw_live_preview(nodes, elements, supports_list, loads, segments, seg_starts):
+def draw_loads_and_geometry(ax, nodes, elements, supports_list, shape_mode, **kwargs):
+    draw_base_geometry(ax, nodes, elements, supports_list)
+
+    if shape_mode == "🔗 Multi-Segment (Polygonal)":
+        loads = kwargs.get('loads', [])
+        segments = kwargs.get('segments', [])
+        seg_starts = kwargs.get('seg_starts', [])
+        
+        for i, seg in enumerate(segments):
+            s_data = seg_starts[i]
+            mx, my, mth = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], seg['L']/2)
+            ax.text(mx - np.sin(mth)*0.4, my + np.cos(mth)*0.4, f"L{i+1}={seg['L']:.2f}m", color='black', fontsize=7, ha='center', va='center', rotation=np.degrees(mth))
+
+        scale_ld = 0.05
+        for ld in loads:
+            i = ld['seg_idx']
+            s_data = seg_starts[i]
+            
+            px1, py1, th1 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['start'])
+            px2, py2, th2 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['end'])
+            
+            w1, w2 = ld['w1'], ld['w2']
+            
+            if ld['type'] == 'Point Load':
+                h = 1.0
+                if ld['dir'] == 'Gravity (Vertical ↓)':
+                    ax.arrow(px1, py1+h, 0, -h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue', zorder=4)
+                    ax.text(px1, py1+h+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center')
+                else:
+                    c, s = np.cos(th1), np.sin(th1)
+                    start_x, start_y = px1 - s*h, py1 + c*h
+                    ax.arrow(start_x, start_y, s*h, -c*h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue', zorder=4)
+                    ax.text(start_x, start_y+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center', rotation=np.degrees(th1))
+            else:
+                if ld['dir'] == 'Gravity (Vertical ↓)':
+                    hx1, hy1 = px1, py1 + w1 * scale_ld
+                    hx2, hy2 = px2, py2 + w2 * scale_ld
+                else:
+                    c1, s1 = np.cos(th1), np.sin(th1)
+                    c2, s2 = np.cos(th2), np.sin(th2)
+                    hx1, hy1 = px1 - s1 * w1 * scale_ld, py1 + c1 * w1 * scale_ld
+                    hx2, hy2 = px2 - s2 * w2 * scale_ld, py2 + c2 * w2 * scale_ld
+                    
+                ax.add_patch(Polygon([(px1,py1), (hx1,hy1), (hx2,hy2), (px2,py2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2))
+                
+                # 💡 رسم أسهم داخلية للتظليل
+                num_arrows = max(2, int(np.hypot(px2-px1, py2-py1) / 0.5))
+                for k in range(1, num_arrows):
+                    frac = k / num_arrows
+                    s_curr = ld['start'] + frac * (ld['end'] - ld['start'])
+                    w_curr = w1 + frac * (w2 - w1)
+                    px_c, py_c, th_c = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], s_curr)
+                    hl = w_curr * scale_ld
+                    if ld['dir'] == 'Gravity (Vertical ↓)':
+                        ax.arrow(px_c, py_c + hl, 0, -hl*0.8, head_width=0.08, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
+                    else:
+                        c_c, s_c = np.cos(th_c), np.sin(th_c)
+                        ax.arrow(px_c - s_c*hl, py_c + c_c*hl, s_c*hl*0.8, -c_c*hl*0.8, head_width=0.08, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
+
+                ax.text(hx1, hy1+0.2, f"{w1}", color='blue', fontsize=6, ha='center')
+                ax.text(hx2, hy2+0.2, f"{w2}", color='blue', fontsize=6, ha='center')
+    else:
+        applied_w = kwargs.get('applied_w', 0)
+        if applied_w > 0.1:
+            max_y = max([n[1] for n in nodes])
+            scale_h = 1.0
+            for el in elements:
+                if el['type'] == 'frame' and el['group'] == 'segment':
+                    n1, n2 = nodes[el['n1']], nodes[el['n2']]
+                    x1, y1 = n1[0], n1[1]
+                    x2, y2 = n2[0], n2[1]
+                    h = scale_h
+                    poly = Polygon([(x1,y1), (x1, y1+h), (x2, y2+h), (x2, y2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2)
+                    ax.add_patch(poly)
+                    dx, dy = x2-x1, y2-y1
+                    num_arr = max(2, int(np.hypot(dx, dy) / 0.5))
+                    for i in range(1, num_arr):
+                        fx, fy = x1 + dx*(i/num_arr), y1 + dy*(i/num_arr)
+                        ax.arrow(fx, fy+h, 0, -h*0.8, head_width=0.1, head_length=0.2, fc='blue', ec='blue', lw=0.5, zorder=3)
+            
+            mid_x = sum([n[0] for n in nodes])/len(nodes)
+            ax.text(mid_x, max_y + scale_h + 0.3, f"{applied_w:.2f} kN/m", color='blue', fontsize=9, fontweight='bold', ha='center')
+
+    for i, n in enumerate(nodes):
+        if any(el['n1'] == i or el['n2'] == i for el in elements if el['type'] == 'frame'):
+            ax.plot(n[0], n[1], 'ko', markersize=2)
+
+def draw_live_preview(nodes, elements, supports_list, shape_mode, **kwargs):
     mpl.rcParams['font.family'] = 'sans-serif'
     mpl.rcParams['font.sans-serif'] = ['Arial']
     fig, ax = plt.subplots(figsize=(8, 5))
     ax.set_aspect('equal', adjustable='datalim')
     ax.axis('off')
-    
-    draw_base_geometry(ax, nodes, elements, supports_list)
-
-    # كتابة أسماء القطع (Segments)
-    for i, seg in enumerate(segments):
-        s_data = seg_starts[i]
-        mx, my, mth = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], seg['L']/2)
-        ax.text(mx - np.sin(mth)*0.4, my + np.cos(mth)*0.4, f"Seg {i+1}", color='black', fontsize=7, ha='center', va='center', rotation=np.degrees(mth))
-
-    # رسم الأحمال (Loads)
-    scale_ld = 0.05
-    for ld in loads:
-        i = ld['seg_idx']
-        s_data = seg_starts[i]
-        
-        px1, py1, th1 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['start'])
-        px2, py2, th2 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['end'])
-        
-        w1, w2 = ld['w1'], ld['w2']
-        
-        if ld['type'] == 'Point Load':
-            h = 1.0
-            if ld['dir'] == 'Gravity (Vertical ↓)':
-                ax.arrow(px1, py1+h, 0, -h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue')
-                ax.text(px1, py1+h+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center')
-            else:
-                c, s = np.cos(th1), np.sin(th1)
-                start_x, start_y = px1 - s*h, py1 + c*h
-                ax.arrow(start_x, start_y, s*h, -c*h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue')
-                ax.text(start_x, start_y+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center', rotation=np.degrees(th1))
-        else:
-            if ld['dir'] == 'Gravity (Vertical ↓)':
-                hx1, hy1 = px1, py1 + w1 * scale_ld
-                hx2, hy2 = px2, py2 + w2 * scale_ld
-            else:
-                c1, s1 = np.cos(th1), np.sin(th1)
-                c2, s2 = np.cos(th2), np.sin(th2)
-                hx1, hy1 = px1 - s1 * w1 * scale_ld, py1 + c1 * w1 * scale_ld
-                hx2, hy2 = px2 - s2 * w2 * scale_ld, py2 + c2 * w2 * scale_ld
-                
-            ax.add_patch(Polygon([(px1,py1), (hx1,hy1), (hx2,hy2), (px2,py2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2))
-            ax.text(hx1, hy1+0.2, f"{w1}", color='blue', fontsize=6, ha='center')
-            ax.text(hx2, hy2+0.2, f"{w2}", color='blue', fontsize=6, ha='center')
-
-    # رسم النقط (Nodes)
-    for i, n in enumerate(nodes):
-        if any(el['n1'] == i or el['n2'] == i for el in elements if el['type'] == 'frame'):
-            ax.plot(n[0], n[1], 'ko', markersize=2)
-
+    draw_loads_and_geometry(ax, nodes, elements, supports_list, shape_mode, **kwargs)
     return safe_render_fig(fig)
 
-def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
+def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list, shape_mode, **kwargs):
     mpl.rcParams['font.family'] = 'sans-serif'
     mpl.rcParams['font.sans-serif'] = ['Arial']
     figs_dict = {}
+    
+    # 0. Load Diagram
+    fig_ld, ax_ld = plt.subplots(figsize=(8, 4))
+    ax_ld.set_aspect('equal', adjustable='datalim')
+    ax_ld.axis('off')
+    draw_loads_and_geometry(ax_ld, nodes, elements, supports_list, shape_mode, **kwargs)
+    figs_dict['Load'] = safe_render_fig(fig_ld)
     
     # 1. Reactions
     fig_r, ax_r = plt.subplots(figsize=(8, 4))
@@ -467,7 +530,6 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
             max_idx = np.argmax(np.abs(vals))
             v_max = abs(vals[max_idx])
             
-            # Smart Decluttering Filter
             if v_max > 0.1 and (L > 0.4 or v_max >= global_max * 0.95):
                 ax_f.text(px[max_idx]-s*0.3, py[max_idx]+c*0.3, f"{v_max:.1f}", fontsize=7, color='black', ha='center', va='center')
                 
@@ -487,7 +549,7 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list):
     for el in elements:
         if el['type'] == 'frame':
             xs = el['internal']['x']
-            v_rel = el['internal']['v_rel'] * 20.0 # مقياس تكبير الرسم
+            v_rel = el['internal']['v_rel'] * 20.0 
             x1, y1 = nodes[el['n1']]
             c, s = el['c'], el['s']
             px = x1 + c * xs - s * v_rel
@@ -519,7 +581,6 @@ def render_advanced_shape_module():
             with st.expander(f"⚙️ Segment {i+1}", expanded=True):
                 s_type = st.radio(f"Shape Type", ["Straight Line", "Curve (Arc & Radius)", "Curve (Chord & Rise)"], key=f"t_{i}", horizontal=True)
                 
-                # Connection Logic
                 smooth = True
                 start_angle = 0.0
                 if i == 0:
@@ -530,7 +591,6 @@ def render_advanced_shape_module():
                     if not smooth:
                         start_angle = st.number_input("New Starting Angle (°)", value=0.0, step=5.0, key=f"sa_{i}")
 
-                # Segment Math processing
                 if s_type == "Straight Line":
                     L = st.number_input("Length (L) (m)", value=2.0, step=0.5, key=f"l_{i}")
                     kappa = 0.0
@@ -628,6 +688,7 @@ def render_advanced_shape_module():
         base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=1)
         
         c_sup = st.selectbox("Corner Support (Seg 1 Start)", ["Hinged", "Roller", "Fixed"])
+        # 💡 زاوية الركيزة هنا أصبحت مرتبطة بالرسم وتدور مع المثلث
         c_ang = st.number_input("Corner Angle (°)", value=0.0, step=15.0)
         
         num_base_sups = st.number_input("Additional Ground Supports", 0, 10, 1)
@@ -643,7 +704,7 @@ def render_advanced_shape_module():
 
     with c_plot:
         st.markdown("<h4 style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px;'>Live Geometry & Loads</h4>", unsafe_allow_html=True)
-        live_img = draw_live_preview(nodes, elements, supports_list, loads_data, segments, seg_starts)
+        live_img = draw_live_preview(nodes, elements, supports_list, "🔗 Multi-Segment (Polygonal)", loads=loads_data, segments=segments, seg_starts=seg_starts)
         st.image(live_img, use_container_width=True)
 
     st.markdown("---")
@@ -659,14 +720,18 @@ def render_advanced_shape_module():
             sc_v = c_s2.slider("Shear Scale", 0.001, 0.100, 0.015, step=0.001)
             sc_m = c_s3.slider("Moment Scale", 0.001, 0.100, 0.015, step=0.001)
             
-            img_bufs = plot_sap2000_diagrams(nodes, elements, R, {'N': sc_n, 'V': sc_v, 'M': sc_m}, supports_list)
+            img_bufs = plot_sap2000_diagrams(nodes, elements, R, {'N': sc_n, 'V': sc_v, 'M': sc_m}, supports_list, "🔗 Multi-Segment (Polygonal)", loads=loads_data, segments=segments, seg_starts=seg_starts)
             
-            c_p1, c_p2 = st.columns(2)
-            c_p1.image(img_bufs['M'], caption="Bending Moment Diagram (kN.m)")
-            c_p2.image(img_bufs['V'], caption="Shear Force Diagram (kN)")
-            c_p1.image(img_bufs['N'], caption="Axial Force Diagram (kN)")
-            c_p2.image(img_bufs['React'], caption="Support Reactions (kN)")
-            st.image(img_bufs['D'], caption="Deflection Deformed Shape")
+            # 💡 التوزيع الجديد 3×2 ليكون متطابقاً مع الصورة 3
+            c_p1, c_p2, c_p3 = st.columns(3)
+            c_p1.image(img_bufs['Load'], caption="Assigned Load Diagram")
+            c_p2.image(img_bufs['React'], caption="Reactions Diagram (kN)")
+            c_p3.image(img_bufs['N'], caption="Axial Force Diagram (kN)")
+            
+            c_p4, c_p5, c_p6 = st.columns(3)
+            c_p4.image(img_bufs['V'], caption="Shear Force Diagram (kN)")
+            c_p5.image(img_bufs['M'], caption="Bending Moment Diagram (kN.m)")
+            c_p6.image(img_bufs['D'], caption="Deflection Deformed Shape")
             
             # --- Safety Checks Quick Table ---
             max_m, max_v = 0.0, 0.0
