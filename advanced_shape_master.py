@@ -14,8 +14,8 @@ from docx import Document
 from docx.shared import Cm, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml import OxmlElement, parse_xml
-from docx.oxml.ns import nsdecls, qn
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 try:
     from config import SECTIONS_DB, STRUTS_DB
@@ -36,7 +36,6 @@ def apply_plot_styles():
 def get_short_name(sec_name):
     return re.sub(r'\s*\(.*?\)', '', sec_name).strip()
 
-# 💡 دالة لقص الحواف البيضاء/الشفافة لعمل أكبر زووم في الوورد
 def crop_image_bbox(img_bytes):
     img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
     bg = Image.new("RGBA", img.size, (255, 255, 255, 0))
@@ -53,7 +52,6 @@ def safe_render_fig(fig):
         plt.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
         buf = io.BytesIO()
         fig.savefig(buf, format='png', dpi=400, bbox_inches='tight', pad_inches=0.0, transparent=True)
-        # تمرير الصورة لدالة القص
         return crop_image_bbox(buf.getvalue())
     finally:
         plt.close(fig)
@@ -363,19 +361,15 @@ def draw_base_geometry(ax, nodes, elements, supports_list, sec_name=None, segmen
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
-            # رسم الكيرف الفعلي في الجيومتري
             if el.get('group') == 'segment' and segments and seg_starts:
                 s_idx = el['seg_idx']
                 seg = segments[s_idx]
                 s_data = seg_starts[s_idx]
-                dist1 = np.hypot(n1[0]-s_data['x0'], n1[1]-s_data['y0']) 
-                dist2 = np.hypot(n2[0]-s_data['x0'], n2[1]-s_data['y0'])
-                # تقريب مسافة القوس
-                num_pts = 10
-                curve_pts = []
-                for p in np.linspace(0, el['L'], num_pts):
-                    # هنا نرسم العنصر كخط مستقيم لسهولة التعبير، لأننا قمنا بتجزئة الكيرف أصلاً في الدالة
-                    pass
+                curve_x, curve_y = [], []
+                for p in np.linspace(0, el['L'], 5):
+                    cx, cy, _ = get_parametric_point(nodes[n1][0], nodes[n1][1], s_data['th0'], s_data['kappa'], p)
+                    curve_x.append(cx)
+                    curve_y.append(cy)
                 ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
             else:
                 ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
@@ -447,7 +441,6 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads,
         s_data = seg_starts[i]
         w1, w2 = ld['w1'], ld['w2']
         
-        # 💡 خوارزمية رسم صندوق الحمل الموازي للكيرف
         num_pts = max(10, int((ld['end'] - ld['start']) / 0.1))
         s_vals = np.linspace(ld['start'], ld['end'], num_pts)
         poly_pts = []
@@ -467,7 +460,6 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads,
         poly_pts.extend(top_pts[::-1])
         ax.add_patch(Polygon(poly_pts, facecolor='none', edgecolor='blue', lw=0.8, zorder=2))
 
-        # 💡 أسهم توضيحية قصيرة بمسافات متباعدة
         num_arrows = max(3, int((ld['end'] - ld['start']) / 0.8))
         for k in range(num_arrows):
             frac = k / (num_arrows - 1) if num_arrows > 1 else 0.5
@@ -475,7 +467,7 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads,
             px_c, py_c, th_c = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], sv)
             w_curr = w1 + frac * (w2 - w1)
             hl = w_curr * scale_ld
-            arr_len = hl * 0.6 # سهم قصير 60% من الارتفاع
+            arr_len = hl * 0.6 
             
             if ld['dir'] == 'Gravity (Vertical ↓)':
                 ax.arrow(px_c, py_c + arr_len, 0, -arr_len, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
@@ -483,7 +475,6 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads,
                 c_c, s_c = np.cos(th_c), np.sin(th_c)
                 ax.arrow(px_c - s_c*arr_len, py_c + c_c*arr_len, s_c*arr_len, -c_c*arr_len, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
 
-        # 💡 طباعة القيم بالألوان والأسود بدون kN
         px1, py1, th1 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['start'])
         hx1 = px1 if ld['dir'] == 'Gravity (Vertical ↓)' else px1 - np.sin(th1)*w1*scale_ld
         hy1 = py1 + w1*scale_ld if ld['dir'] == 'Gravity (Vertical ↓)' else py1 + np.cos(th1)*w1*scale_ld
@@ -493,6 +484,14 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads,
         hx2 = px2 if ld['dir'] == 'Gravity (Vertical ↓)' else px2 - np.sin(th2)*w2*scale_ld
         hy2 = py2 + w2*scale_ld if ld['dir'] == 'Gravity (Vertical ↓)' else py2 + np.cos(th2)*w2*scale_ld
         ax.text(hx2, hy2+0.2, f"{w2:.1f}", color='black', fontsize=6, ha='center', fontname='Arial')
+
+def draw_live_preview(nodes, elements, supports_list, sec_name, loads, segments, seg_starts):
+    apply_plot_styles()
+    fig, ax = plt.subplots(figsize=(8, 5))
+    ax.set_aspect('equal', adjustable='datalim')
+    ax.axis('off')
+    draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads, segments, seg_starts)
+    return safe_render_fig(fig)
 
 def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, supports_list, sec_name, loads, segments, seg_starts):
     apply_plot_styles()
@@ -599,7 +598,6 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
     figs_dict['V'] = create_force_plot('V', scales['V'], 'blue', 'red')
     figs_dict['M'] = create_force_plot('M', scales['M'], 'blue', 'red')
     
-    # 3. Deflection
     fig_d, ax_d = plt.subplots(figsize=(6, 5))
     ax_d.set_aspect('equal', adjustable='datalim')
     ax_d.axis('off')
