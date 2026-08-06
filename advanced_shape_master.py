@@ -164,6 +164,15 @@ def parse_dxf_to_data(file_bytes):
                     'x0': p_start[0], 'y0': p_start[1], 'kappa': kappa
                 })
 
+        # 💡 استخراج طول الكمرة الأفقية بشكل منفصل
+        min_y = min(min(f['p1'][1], f['p2'][1]) for f in raw_frames)
+        base_len = 0.0
+        for f in raw_frames:
+            if f['type'] == 'line':
+                if abs(f['p1'][1] - min_y) < 0.1 and abs(f['p2'][1] - min_y) < 0.1:
+                    bl = abs(f['p1'][0] - f['p2'][0])
+                    if bl > base_len: base_len = bl
+
         struts_mapped = []
         for s in raw_struts:
             best_seg, best_s, min_d, is_p1_top = 0, 0.0, 9999.0, True
@@ -196,7 +205,8 @@ def parse_dxf_to_data(file_bytes):
         for sp in raw_supports:
             supps_mapped.append({'x': sp['x'], 'y': sp['y'], 'type': 'Hinged'})
 
-        return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped}
+        # 💡 تم إضافة base_length للقاموس النهائي لتفادي الـ KeyError
+        return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped, 'base_length': base_len}
         
     except Exception as e:
         st.error(f"⚠️ حدث خطأ أثناء تحليل ملف الـ DXF. تأكد من أن الملف سليم: {e}")
@@ -503,7 +513,6 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
-            # رسم الكيرفات بالخطوط المتقطعة المستقيمة لمنع الإيرور
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
             
     for sup in supports_list:
@@ -1050,7 +1059,7 @@ def render_advanced_shape_module():
         base_def_idx = next((i for i, s in enumerate(base_sec_list) if 'SOLDIER' in s.upper()), 0)
         base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=base_def_idx, on_change=reset_adv_state)
         
-        def_base_len = dxf_data['base_length'] if dxf_data else 0.0
+        def_base_len = dxf_data.get('base_length', 0.0) if dxf_data else 0.0
         base_length = bs2.number_input("Total Base Length (m) [Optional]", value=float(def_base_len), step=0.5, on_change=reset_adv_state)
         
         c_sup1, c_sup2 = st.columns(2)
