@@ -7,6 +7,7 @@ import io
 import os
 import re
 import math
+import tempfile
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
@@ -78,18 +79,19 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
             color=arr_c, fontsize=7, fontname='Arial', ha='center', va='center')
 
 # =========================================================
-# 1. DXF Parsing Engine (BIM Integration)
+# 1. DXF Parsing Engine (BIM Integration - TempFile Method)
 # =========================================================
 def parse_dxf_to_data(file_bytes):
     if ezdxf is None: return None
+    
+    # 💡 الحل الجذري: حفظ الملف مؤقتاً لتجنب أخطاء التشفير والبيانات الثنائية في الذاكرة
+    tmp_path = ""
     try:
-        # 💡 الحل الجذري لمشكلة الـ Encode في ملفات الكاد
-        try:
-            dxf_str = file_bytes.decode('utf-8')
-        except UnicodeDecodeError:
-            dxf_str = file_bytes.decode('cp1252', errors='ignore')
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp:
+            tmp.write(file_bytes)
+            tmp_path = tmp.name
             
-        doc = ezdxf.read(io.StringIO(dxf_str))
+        doc = ezdxf.readfile(tmp_path)
         msp = doc.modelspace()
         
         raw_frames = []
@@ -104,7 +106,7 @@ def parse_dxf_to_data(file_bytes):
             lyr = e.dxf.layer
             etype = e.dxftype()
             
-            # Supports (Points, Circles, Blocks)
+            # Supports
             if match_layer(lyr, "supp"):
                 if etype in ['POINT', 'CIRCLE', 'INSERT']:
                     if etype == 'POINT':
@@ -114,7 +116,7 @@ def parse_dxf_to_data(file_bytes):
                     elif etype == 'INSERT':
                         raw_supports.append({'x': e.dxf.insert.x, 'y': e.dxf.insert.y})
             
-            # Struts (Lines or Polylines)
+            # Struts
             elif match_layer(lyr, "push") or match_layer(lyr, "pull"):
                 entities = [e]
                 if etype in ['LWPOLYLINE', 'POLYLINE']:
@@ -123,7 +125,7 @@ def parse_dxf_to_data(file_bytes):
                     if sub_e.dxftype() == 'LINE':
                         raw_struts.append({'p1': (sub_e.dxf.start.x, sub_e.dxf.start.y), 'p2': (sub_e.dxf.end.x, sub_e.dxf.end.y)})
                     
-            # Frames (Lines, Arcs, Polylines)
+            # Frames
             elif match_layer(lyr, "frame"):
                 entities = [e]
                 if etype in ['LWPOLYLINE', 'POLYLINE']:
@@ -251,8 +253,14 @@ def parse_dxf_to_data(file_bytes):
         return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped, 'base_length': base_len}
         
     except Exception as e:
-        st.error(f"⚠️ حدث خطأ أثناء تحليل الملف، يرجى التأكد من الصيغة: {e}")
+        st.error(f"⚠️ حدث خطأ أثناء تحليل ملف الـ DXF. تأكد من أن الملف سليم. تفاصيل الخطأ: {e}")
         return None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except:
+                pass
 
 # =========================================================
 # 2. Geometry & Mesh Generators (Parametric Chain Engine)
@@ -547,7 +555,6 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
-            # 💡 التعديل هنا: رسم الكيرفات بالكامل بناءً على نقاط النمذجة عشان ميديناش Error (L)
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
             
     for sup in supports_list:
@@ -907,7 +914,7 @@ def render_advanced_shape_module():
             st.session_state.dxf_parsed = dxf_data
             st.success("✅ DXF Parsed Successfully! Fields below have been auto-filled.")
         else:
-            st.error("❌ Failed to extract meaningful data. Ensure layers are named 'Frame', 'Push Pull', 'Support'.")
+            st.error("❌ Failed to extract meaningful data. Check the format and try again.")
 
     dxf_data = st.session_state.get('dxf_parsed', None)
 
