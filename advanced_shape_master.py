@@ -139,7 +139,6 @@ def parse_dxf_to_data(file_bytes):
 
         if not raw_frames: return None
         
-        # 💡 ترجمة الخطوط والكيرفات باحداثياتها المطلقة بدون ربط إجباري
         chained_segs = []
         for f in raw_frames:
             p_start = f['p1']
@@ -156,16 +155,15 @@ def parse_dxf_to_data(file_bytes):
                 sweep = (f['ea'] - f['sa']) % (2 * math.pi)
                 if sweep == 0: sweep = 2 * math.pi
                 L_arc = f['r'] * sweep
-                kappa = 1.0 / f['r']  # الكاد دائماً يرسم الكيرف عكس عقارب الساعة
+                kappa = 1.0 / f['r']
                 start_ang_rad = f['sa'] + math.pi / 2
                 chained_segs.append({
                     'Shape Type': 'Curve (Arc & Radius)', 'L': L_arc, 'Radius (R) (m)': f['r'], 
-                    'Curvature Direction': "Arching Up ⤴ (Concave)", # مجرد مسمى للواجهة
+                    'Curvature Direction': "Arching Up ⤴ (Concave)", 
                     'start_angle': math.degrees(start_ang_rad), 'smooth': False, 
                     'x0': p_start[0], 'y0': p_start[1], 'kappa': kappa
                 })
 
-        # 💡 إسقاط النهايز على الكيرفات الحقيقية بالمللي
         struts_mapped = []
         for s in raw_struts:
             best_seg, best_s, min_d, is_p1_top = 0, 0.0, 9999.0, True
@@ -194,7 +192,6 @@ def parse_dxf_to_data(file_bytes):
                 'gx': p_ground[0], 'gy': p_ground[1]
             })
 
-        # 💡 الدعامات بنفس مكانها
         supps_mapped = []
         for sp in raw_supports:
             supps_mapped.append({'x': sp['x'], 'y': sp['y'], 'type': 'Hinged'})
@@ -243,7 +240,6 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
     key_nodes = set()
     
     for i, seg in enumerate(segments):
-        # 💡 احترام كامل للإحداثيات المطلقة إذا كانت مستوردة من DXF
         if 'x0' in seg and 'y0' in seg:
             curr_x, curr_y = seg['x0'], seg['y0']
             curr_th = np.radians(seg['start_angle'])
@@ -364,7 +360,6 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
         })
 
     supports_list = []
-    # Only add corner support if it's explicitly enabled (not None) or if we are in UI mode
     for sup in supports:
         nid = get_or_add_node(sup['x'], sup.get('y', 0.0))
         supports_list.append({'node': nid, 'type': sup['type'], 'angle': 0.0})
@@ -508,18 +503,8 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
-            if el.get('group') == 'segment' and segments and seg_starts:
-                s_idx = el['seg_idx']
-                seg = segments[s_idx]
-                s_data = seg_starts[s_idx]
-                curve_x, curve_y = [], []
-                for p in np.linspace(0, el['L'], 10):
-                    cx, cy, _ = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], p)
-                    curve_x.append(cx)
-                    curve_y.append(cy)
-                ax.plot(curve_x, curve_y, color='black', linestyle='-', linewidth=1.5, zorder=1)
-            else:
-                ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
+            # رسم الكيرفات بالخطوط المتقطعة المستقيمة لمنع الإيرور
+            ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
             
     for sup in supports_list:
         n = sup['node']
@@ -873,7 +858,6 @@ def render_advanced_shape_module():
     uploaded_dxf = st.file_uploader("📥 Upload DXF File (.dxf)", type=['dxf'], key="dxf_uploader")
     
     if uploaded_dxf and st.button("Extract Data from DXF"):
-        # 💡 مسح الذاكرة القديمة بالكامل
         if 'adv_solved' in st.session_state: st.session_state.adv_solved = False
         st.session_state.dxf_parsed = None
         
@@ -900,7 +884,6 @@ def render_advanced_shape_module():
                 def_L, def_ang, def_R, def_S, def_smooth = 3.0, 60.0, 5.0, 3.0, True
                 dir_crv_idx = 0
                 
-                # 💡 سحب الإحداثيات المطلقة لو موجودة
                 x0, y0, exact_kappa = None, None, None
                 
                 if dxf_data and i < len(dxf_data['segments']):
@@ -1067,6 +1050,9 @@ def render_advanced_shape_module():
         base_def_idx = next((i for i, s in enumerate(base_sec_list) if 'SOLDIER' in s.upper()), 0)
         base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=base_def_idx, on_change=reset_adv_state)
         
+        def_base_len = dxf_data['base_length'] if dxf_data else 0.0
+        base_length = bs2.number_input("Total Base Length (m) [Optional]", value=float(def_base_len), step=0.5, on_change=reset_adv_state)
+        
         c_sup1, c_sup2 = st.columns(2)
         c_sup = c_sup1.selectbox("Corner Support (Node 0)", ["Hinged", "Roller", "Fixed"], on_change=reset_adv_state)
         c_ang = c_sup2.number_input("Corner Angle (°)", value=0.0, step=15.0, on_change=reset_adv_state)
@@ -1084,7 +1070,7 @@ def render_advanced_shape_module():
             styp = sp2.selectbox(f"Sup G{i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}", on_change=reset_adv_state)
             base_sups.append({'x': sx, 'y': def_sy, 'type': styp})
 
-    nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, seg_sections, loads_data, struts_data, base_sec, base_sups, {'type': c_sup, 'angle': c_ang})
+    nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, seg_sections, loads_data, struts_data, base_sec, base_sups, {'type': c_sup, 'angle': c_ang}, base_length)
 
     with c_plot:
         st.markdown("<h3 style='text-align: center; border-bottom: 2px solid #ddd; padding-bottom: 10px; font-family: Arial; color: #1e3d59;'>Live Geometry & Assignments</h3>", unsafe_allow_html=True)
