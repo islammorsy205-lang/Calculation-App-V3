@@ -14,8 +14,8 @@ from docx import Document
 from docx.shared import Cm, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml import OxmlElement, parse_xml
-from docx.oxml.ns import nsdecls, qn
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
 
 try:
     from config import SECTIONS_DB, STRUTS_DB
@@ -355,7 +355,7 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
 # =========================================================
 def draw_base_geometry(ax, nodes, elements, supports_list, sec_name=None, segments=None, seg_starts=None):
     for el in elements:
-        if 'L' not in el and el['type'] != 'truss': continue
+        if el['type'] not in ['frame', 'truss']: continue
         n1, n2 = nodes[el['n1']], nodes[el['n2']]
         if el['type'] == 'truss':
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
