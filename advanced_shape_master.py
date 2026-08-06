@@ -79,7 +79,7 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
             color=arr_c, fontsize=7, fontname='Arial', ha='center', va='center')
 
 # =========================================================
-# 1. DXF Parsing Engine (Absolute Translation to J1 = 0,0)
+# 1. DXF Parsing Engine (Absolute Translation & Axis Normalization)
 # =========================================================
 def parse_dxf_to_data(file_bytes):
     if ezdxf is None: return None
@@ -342,12 +342,11 @@ def get_approx_xy(segs, s_idx, s_val):
             curr_th += kappa * L
     return curr_x, curr_y
 
-def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, corner_sup):
+def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, corner_sup, auto_mesh_size=0.25):
     nodes = []
     elements = []
     nodal_loads = []
     
-    # 💡 زيادة سماحية الالتحام لـ 1 مللي لضمان تجميع العقد بشكل محكم
     node_tol = 1e-3 
     
     def get_or_add_node(x, y):
@@ -383,10 +382,9 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
             if sp.get('seg_idx') == i: key_s_vals.append(sp['s_dist'])
             
         keys = list(key_s_vals)
-        num_sub = max(1, int(np.ceil(L / 0.25)))
+        num_sub = max(1, int(np.ceil(L / auto_mesh_size)))
         for p in np.linspace(0, L, num_sub+1): keys.append(p)
             
-        # 💡 توحيد دقة الأرقام لـ 5 علامات عشرية لضمان تطابق الأطوال
         keys = sorted(list(set([min(max(round(k, 5), 0.0), round(L, 5)) for k in keys])))
         
         node_indices = []
@@ -989,7 +987,7 @@ def reset_adv_state():
 def render_advanced_shape_module():
     st.markdown("## 🎢 The Chain Builder (Multi-Segment & CAD Integration)")
     
-    st.info("💡 **Tip:** استخدم `Ctrl+Z` داخل أي مربع أرقام أو نصوص للتراجع عن آخر تعديل كتبته. (مفعلة تلقائياً)")
+    st.info("💡 **Tip:** استخدم `Ctrl+Z` داخل أي مربع أرقام للاسترجاع وتصحيح الخطأ فوراً (مفعلة تلقائياً عبر متصفحك).")
 
     if 'adv_solved' not in st.session_state:
         st.session_state.adv_solved = False
@@ -1005,7 +1003,7 @@ def render_advanced_shape_module():
         if dxf_data:
             st.session_state.dxf_parsed = dxf_data
             st.session_state.num_loads_override = 0 
-            st.success("✅ DXF Parsed Successfully! Geometry locked with absolute CAD coordinates. (J1 set to 0,0)")
+            st.success("✅ DXF Parsed Successfully! Geometry locked with absolute CAD coordinates. (J1 automatically centered to 0,0)")
         else:
             st.error("❌ Failed to extract meaningful data. Check the format and try again.")
 
@@ -1015,7 +1013,7 @@ def render_advanced_shape_module():
     c_in, c_plot = st.columns([1.2, 1.8])
     
     with c_in:
-        # 💡 نقل الدعامات لأعلى القائمة لسهولة الرؤية والتعديل
+        # 💡 نقل الدعامات لأعلى الواجهة بناءً على طلب المستخدم
         st.markdown("### 1. Supports & Base System")
         def_supp_count = len(dxf_data['supports']) if dxf_data else 2
         num_base_sups = st.number_input("Count of Point Supports", 0, 50, def_supp_count, on_change=reset_adv_state)
@@ -1172,7 +1170,7 @@ def render_advanced_shape_module():
                 col_l1, col_l2, col_l3 = st.columns(3)
                 load_category = col_l1.selectbox("Load Category", ["Dead Load", "Live Load"], key=f"ld_cat_{i}", on_change=reset_adv_state)
                 l_type = col_l2.selectbox("Type", ["Uniform", "Trapezoidal", "Point Load"], key=f"ld_t_{i}", on_change=reset_adv_state)
-                # 💡 تعديل المحاور لتصبح X و Z بدلا من Y
+                # 💡 تعديل المحاور لتصبح X و Z حسب طلب المستخدم
                 l_dir = col_l3.selectbox("Direction", ["Global Z (Vertical ↑+, ↓-)", "Global X (Horizontal →+, ←-)", "Local Z (Perpendicular ↗+, ↙-)"], key=f"ld_d_{i}", on_change=reset_adv_state)
                 
                 target_mode = st.radio("Apply Load To:", ["Single Segment", "Multiple Segments", "Total System (All Segments)"], key=f"ld_mode_{i}", horizontal=True, on_change=reset_adv_state)
@@ -1188,7 +1186,7 @@ def render_advanced_shape_module():
                     target_segments = list(range(int(num_segs)))
                 
                 sc1, sc2, sc3 = st.columns(3)
-                # 💡 إشارات السالب والموجب كما طلبها المستخدم
+                # 💡 قيم الحمل تسمح بالسالب والموجب
                 w1 = sc1.number_input("Value W1 (kN/m or kN)", value=-15.0, key=f"ld_w1_{i}", on_change=reset_adv_state)
                 w2_val = w1 if l_type != "Trapezoidal" else sc2.number_input("Value W2 (kN/m)", value=-5.0, key=f"ld_w2_{i}", on_change=reset_adv_state)
                 
@@ -1269,8 +1267,8 @@ def render_advanced_shape_module():
                 if is_dxf_strut:
                     nx, ny = get_approx_xy(segments, def_s_idx, def_dist)
                     actual_L = math.hypot(def_gx - nx, def_gy - ny)
-                    st.success(f"🔒 DXF Strut Mapped: S{def_s_idx+1} | Length: {actual_L:.2f}m")
                     
+                    # 💡 الفلترة الذكية بناءً على الطول الفعلي للناهز
                     valid_opts = []
                     for opt in strut_opts:
                         m = re.search(r'\((\d+\.\d+):(\d+\.\d+)m\)', opt)
@@ -1278,6 +1276,8 @@ def render_advanced_shape_module():
                             min_l, max_l = float(m.group(1)), float(m.group(2))
                             if min_l <= actual_L <= max_l:
                                 valid_opts.append(opt)
+                    
+                    st.success(f"🔒 DXF Strut Mapped: S{def_s_idx+1} | Length: {actual_L:.2f}m")
                     if not valid_opts: 
                         valid_opts = strut_opts
                         st.warning("⚠️ لا يوجد ناهز يطابق هذا الطول في قاعدة البيانات!")
@@ -1317,6 +1317,7 @@ def render_advanced_shape_module():
     combined_loads.extend(dead_loads_only)
     combined_loads.extend(live_loads_only)
 
+    # توليد العقد للعرض الفوري
     nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, seg_sections, combined_loads, struts_data, None, base_sups, {'type': 'Hinged', 'angle': 0.0})
 
     with c_plot:
@@ -1384,10 +1385,10 @@ def render_advanced_shape_module():
         c_p4, c_p5, c_p6 = st.columns(3)
         c_p4.image(img_bufs['N'], use_container_width=True)
         c_p4.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['N']}</p>", unsafe_allow_html=True)
-        c_p5.image(img_bufs['M'], use_container_width=True)
-        c_p5.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['M']}</p>", unsafe_allow_html=True)
-        c_p6.image(img_bufs['D'], use_container_width=True)
-        c_p6.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['D']}</p>", unsafe_allow_html=True)
+        c_p5.image(img_bufs['V'], use_container_width=True)
+        c_p5.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['V']}</p>", unsafe_allow_html=True)
+        c_p6.image(img_bufs['M'], use_container_width=True)
+        c_p6.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['M']}</p>", unsafe_allow_html=True)
         
         st.markdown("### 📊 Safety Summary (Combination: Dead + Live)")
         safety_data = []
@@ -1409,12 +1410,6 @@ def render_advanced_shape_module():
             
         df = pd.DataFrame(safety_data)
         st.table(df)
-
-        fea_data['max_M'] = max([float(x['Actual'].split(',')[0].split('=')[1]) for x in safety_data]) if safety_data else 0
-        fea_data['max_V'] = max([float(x['Actual'].split(',')[1].split('=')[1]) for x in safety_data]) if safety_data else 0
-        fea_data['sec_props'] = {'name': "Mixed Sections", 'Mall': 999.0, 'Qall': 999.0}
-        fea_data['img_bufs'] = img_bufs
-        fea_data['safety_df'] = safety_data
         
         st.markdown("---")
         doc_out = generate_chain_report(fea_data)
