@@ -83,7 +83,13 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
 def parse_dxf_to_data(file_bytes):
     if ezdxf is None: return None
     try:
-        doc = ezdxf.read(io.BytesIO(file_bytes))
+        # 💡 الحل الجذري لمشكلة الـ Encode في ملفات الكاد
+        try:
+            dxf_str = file_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            dxf_str = file_bytes.decode('cp1252', errors='ignore')
+            
+        doc = ezdxf.read(io.StringIO(dxf_str))
         msp = doc.modelspace()
         
         raw_frames = []
@@ -245,7 +251,7 @@ def parse_dxf_to_data(file_bytes):
         return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped, 'base_length': base_len}
         
     except Exception as e:
-        st.error(f"⚠️ خطأ أثناء تحليل ملف الـ DXF: {e}")
+        st.error(f"⚠️ حدث خطأ أثناء تحليل الملف، يرجى التأكد من الصيغة: {e}")
         return None
 
 # =========================================================
@@ -541,18 +547,8 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
-            if el.get('group') == 'segment' and segments and seg_starts:
-                s_idx = el['seg_idx']
-                seg = segments[s_idx]
-                s_data = seg_starts[s_idx]
-                curve_x, curve_y = [], []
-                for p in np.linspace(0, el['L'], 10):
-                    cx, cy, _ = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], p)
-                    curve_x.append(cx)
-                    curve_y.append(cy)
-                ax.plot(curve_x, curve_y, color='black', linestyle='-', linewidth=1.5, zorder=1)
-            else:
-                ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
+            # 💡 التعديل هنا: رسم الكيرفات بالكامل بناءً على نقاط النمذجة عشان ميديناش Error (L)
+            ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
             
     for sup in supports_list:
         n = sup['node']
@@ -911,11 +907,10 @@ def render_advanced_shape_module():
             st.session_state.dxf_parsed = dxf_data
             st.success("✅ DXF Parsed Successfully! Fields below have been auto-filled.")
         else:
-            st.error("❌ Failed to extract meaningful data. Check the format and try again.")
+            st.error("❌ Failed to extract meaningful data. Ensure layers are named 'Frame', 'Push Pull', 'Support'.")
 
     dxf_data = st.session_state.get('dxf_parsed', None)
 
-    # 💡 الشاشة منقسمة (1.2 مدخلات و 1.8 للرسمة عشان تبقى كبيرة جداً)
     c_in, c_plot = st.columns([1.2, 1.8])
     
     with c_in:
