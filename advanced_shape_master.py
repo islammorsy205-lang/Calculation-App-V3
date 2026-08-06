@@ -349,6 +349,7 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
                 
             s_mid = (keys[j] + keys[j+1]) / 2.0
             _, _, th_mid = eval_seg_point(seg, s_mid, seg_start_data[i])
+            c_t, s_t = np.cos(th_mid), np.sin(th_mid)
             
             p_x1, p_y1, p_x2, p_y2 = 0.0, 0.0, 0.0, 0.0
             
@@ -359,12 +360,15 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
                         wa = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j] - ld['start']) / L_ld
                         wb = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j+1] - ld['start']) / L_ld
                         
-                        if ld['dir'] == 'Gravity (Vertical ↓)':
-                            p_y1 -= wa; p_y2 -= wb
-                        else: 
-                            c_t, s_t = np.cos(th_mid), np.sin(th_mid)
-                            p_x1 += wa * s_t; p_y1 -= wa * c_t
-                            p_x2 += wb * s_t; p_y2 -= wb * c_t
+                        # 💡 المعالجة الدقيقة لتحليل الأحمال لمركبات Local X و Local Y
+                        if 'Global Y' in ld['dir']:
+                            p_x1 += wa * s_t; p_y1 += wa * c_t
+                            p_x2 += wb * s_t; p_y2 += wb * c_t
+                        elif 'Global X' in ld['dir']:
+                            p_x1 += wa * c_t; p_y1 -= wa * s_t
+                            p_x2 += wb * c_t; p_y2 -= wb * s_t
+                        else: # Local Y
+                            p_y1 += wa; p_y2 += wb
                             
             elements.append({
                 'type': 'frame', 'group': 'segment', 'sec': sec_props['name'],
@@ -378,12 +382,15 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
                 try:
                     idx = keys.index(round(ld['start'], 4))
                     nid = node_indices[idx]
-                    if ld['dir'] == 'Gravity (Vertical ↓)':
-                        nodal_loads.append({'node': nid, 'Fx': 0.0, 'Fy': -ld['w1']})
-                    else:
+                    
+                    if 'Global Y' in ld['dir']:
+                        nodal_loads.append({'node': nid, 'Fx': 0.0, 'Fy': ld['w1']})
+                    elif 'Global X' in ld['dir']:
+                        nodal_loads.append({'node': nid, 'Fx': ld['w1'], 'Fy': 0.0})
+                    else: # Local Y
                         _, _, th_pt = eval_seg_point(seg, ld['start'], seg_start_data[i])
-                        c_t, s_t = np.cos(th_pt), np.sin(th_pt)
-                        nodal_loads.append({'node': nid, 'Fx': ld['w1']*s_t, 'Fy': -ld['w1']*c_t})
+                        c_pt, s_pt = np.cos(th_pt), np.sin(th_pt)
+                        nodal_loads.append({'node': nid, 'Fx': -ld['w1']*s_pt, 'Fy': ld['w1']*c_pt})
                 except ValueError: pass
                 
         curr_x, curr_y, curr_th = eval_seg_point(seg, L, seg_start_data[i])
@@ -563,7 +570,6 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
                 seg = segments[s_idx]
                 s_data = seg_starts[s_idx]
                 curve_x, curve_y = [], []
-                # 💡 رسم القطاع بالكامل بسلاسة
                 s_start = el.get('s_start', 0.0)
                 s_end = el.get('s_end', el.get('L', 0.0))
                 for p in np.linspace(s_start, s_end, 10):
@@ -643,13 +649,18 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
         for sv in s_vals:
             px, py, th = eval_seg_point(segments[i], sv, s_data)
             w_curr = w1 + (w2 - w1) * (sv - ld.get('start', 0)) / max(1e-5, (ld.get('end', 0) - ld.get('start', 0)))
-            hl = w_curr * scale_ld
+            w_val = w_curr * scale_ld
             poly_pts.append((px, py))
-            if ld.get('dir') == 'Gravity (Vertical ↓)':
-                top_pts.append((px, py + hl))
+            
+            if 'Global Y' in ld.get('dir', ''):
+                f_vx, f_vy = 0.0, w_val
+            elif 'Global X' in ld.get('dir', ''):
+                f_vx, f_vy = w_val, 0.0
             else:
                 c, s = math.cos(th), math.sin(th)
-                top_pts.append((px - s*hl, py + c*hl))
+                f_vx, f_vy = -s * w_val, c * w_val
+                
+            top_pts.append((px - f_vx, py - f_vy))
                 
         poly_pts.extend(top_pts[::-1])
         if len(poly_pts) > 2:
@@ -661,24 +672,35 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
                 sv = ld.get('start', 0) + frac * (ld.get('end', 0) - ld.get('start', 0))
                 px_c, py_c, th_c = eval_seg_point(segments[i], sv, s_data)
                 w_curr = w1 + frac * (w2 - w1)
-                hl = w_curr * scale_ld
-                arr_len = hl * 0.6 
+                w_val = w_curr * scale_ld
                 
-                if ld.get('dir') == 'Gravity (Vertical ↓)':
-                    ax.arrow(px_c, py_c + arr_len, 0, -arr_len, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
+                if 'Global Y' in ld.get('dir', ''):
+                    f_vx, f_vy = 0.0, w_val
+                elif 'Global X' in ld.get('dir', ''):
+                    f_vx, f_vy = w_val, 0.0
                 else:
                     c_c, s_c = math.cos(th_c), math.sin(th_c)
-                    ax.arrow(px_c - s_c*arr_len, py_c + c_c*arr_len, s_c*arr_len, -c_c*arr_len, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
+                    f_vx, f_vy = -s_c * w_val, c_c * w_val
+                
+                ax.arrow(px_c - f_vx, py_c - f_vy, f_vx, f_vy, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
 
             px1, py1, th1 = eval_seg_point(segments[i], ld.get('start', 0), s_data)
-            hx1 = px1 if ld.get('dir') == 'Gravity (Vertical ↓)' else px1 - math.sin(th1)*w1*scale_ld
-            hy1 = py1 + w1*scale_ld if ld.get('dir') == 'Gravity (Vertical ↓)' else py1 + math.cos(th1)*w1*scale_ld
-            ax.text(hx1, hy1+0.2, f"{w1:.1f}", color='black', fontsize=6, ha='center', fontname='Arial')
+            w_val_1 = w1 * scale_ld
+            if 'Global Y' in ld.get('dir', ''): f_vx, f_vy = 0.0, w_val_1
+            elif 'Global X' in ld.get('dir', ''): f_vx, f_vy = w_val_1, 0.0
+            else:
+                c_t, s_t = math.cos(th1), math.sin(th1)
+                f_vx, f_vy = -s_t * w_val_1, c_t * w_val_1
+            ax.text(px1 - f_vx, py1 - f_vy + 0.2, f"{w1:.1f}", color='black', fontsize=6, ha='center', fontname='Arial')
 
             px2, py2, th2 = eval_seg_point(segments[i], ld.get('end', 0), s_data)
-            hx2 = px2 if ld.get('dir') == 'Gravity (Vertical ↓)' else px2 - math.sin(th2)*w2*scale_ld
-            hy2 = py2 + w2*scale_ld if ld.get('dir') == 'Gravity (Vertical ↓)' else py2 + math.cos(th2)*w2*scale_ld
-            ax.text(hx2, hy2+0.2, f"{w2:.1f}", color='black', fontsize=6, ha='center', fontname='Arial')
+            w_val_2 = w2 * scale_ld
+            if 'Global Y' in ld.get('dir', ''): f_vx, f_vy = 0.0, w_val_2
+            elif 'Global X' in ld.get('dir', ''): f_vx, f_vy = w_val_2, 0.0
+            else:
+                c_t, s_t = math.cos(th2), math.sin(th2)
+                f_vx, f_vy = -s_t * w_val_2, c_t * w_val_2
+            ax.text(px2 - f_vx, py2 - f_vy + 0.2, f"{w2:.1f}", color='black', fontsize=6, ha='center', fontname='Arial')
 
 def draw_live_preview(nodes, elements, supports_list, seg_sections, loads, segments, seg_starts):
     apply_plot_styles()
@@ -923,7 +945,7 @@ def render_advanced_shape_module():
         if dxf_data:
             st.session_state.dxf_parsed = dxf_data
             st.session_state.num_loads_override = 0 
-            st.success("✅ DXF Parsed Successfully! Fields below have been auto-filled with ABSOLUTE accuracy.")
+            st.success("✅ DXF Parsed Successfully! Geometry locked with absolute CAD coordinates.")
         else:
             st.error("❌ Failed to extract meaningful data. Check the format and try again.")
 
@@ -937,7 +959,6 @@ def render_advanced_shape_module():
         def_segs = len(dxf_data['segments']) if dxf_data else 1
         num_segs = st.number_input("Number of Segments in Chain", min_value=1, max_value=20, value=def_segs, on_change=reset_adv_state)
         
-        # 💡 تعريف `seg_choices` مبكراً لتفادي NameError
         seg_choices = [f"S{i+1}" for i in range(int(num_segs))]
         
         segments = []
@@ -1070,7 +1091,7 @@ def render_advanced_shape_module():
                 col_l1, col_l2, col_l3 = st.columns(3)
                 load_category = col_l1.selectbox("Load Category", ["Dead Load", "Live Load"], key=f"ld_cat_{i}", on_change=reset_adv_state)
                 l_type = col_l2.selectbox("Type", ["Uniform", "Trapezoidal", "Point Load"], key=f"ld_t_{i}", on_change=reset_adv_state)
-                l_dir = col_l3.selectbox("Direction", ["Gravity (Vertical ↓)", "Perpendicular (Local ↘)"], key=f"ld_d_{i}", on_change=reset_adv_state)
+                l_dir = col_l3.selectbox("Direction", ["Global Y (Vertical ↑+, ↓-)", "Global X (Horizontal →+, ←-)", "Local Y (Perpendicular ↗+, ↙-)"], key=f"ld_d_{i}", on_change=reset_adv_state)
                 
                 target_mode = st.radio("Apply Load To:", ["Single Segment", "Multiple Segments", "Total System (All Segments)"], key=f"ld_mode_{i}", horizontal=True, on_change=reset_adv_state)
                 
@@ -1079,24 +1100,28 @@ def render_advanced_shape_module():
                     s_choice = st.selectbox("Select Segment", seg_choices, key=f"ld_single_{i}", on_change=reset_adv_state)
                     target_segments.append(int(s_choice[1:]) - 1)
                 elif target_mode == "Multiple Segments":
-                    selected_segs = st.multiselect("Select Segments", seg_choices, default=[seg_choices[0]], key=f"ld_multi_{i}", on_change=reset_adv_state)
+                    selected_segs = st.multiselect("Select Segments", seg_choices, default=[seg_choices[0]] if seg_choices else [], key=f"ld_multi_{i}", on_change=reset_adv_state)
                     target_segments = [int(s[1:]) - 1 for s in selected_segs]
                 else:
                     target_segments = list(range(int(num_segs)))
                 
                 sc1, sc2, sc3 = st.columns(3)
-                w1 = sc1.number_input("Value W1 (kN/m or kN)", value=15.0, key=f"ld_w1_{i}", on_change=reset_adv_state)
-                w2_val = w1 if l_type != "Trapezoidal" else sc2.number_input("Value W2 (kN/m)", value=5.0, key=f"ld_w2_{i}", on_change=reset_adv_state)
+                w1 = sc1.number_input("Value W1 (kN/m or kN)", value=-15.0, key=f"ld_w1_{i}", on_change=reset_adv_state)
+                w2_val = w1 if l_type != "Trapezoidal" else sc2.number_input("Value W2 (kN/m)", value=-5.0, key=f"ld_w2_{i}", on_change=reset_adv_state)
                 
                 for s_idx_num in target_segments:
                     max_s = float(segments[s_idx_num].get('L', 0.0))
+                    start = sc1.number_input("Start Arc Dist (m)", 0.0, max_s, value=0.0, format="%.5f", key=f"ld_st_{i}_{s_idx_num}", on_change=reset_adv_state) if target_mode == "Single Segment" else 0.0
+                    end = sc3.number_input("End Arc Dist (m)", 0.0, max_s, value=max_s, format="%.5f", key=f"ld_en_{i}_{s_idx_num}", on_change=reset_adv_state) if target_mode == "Single Segment" else max_s
+                    if l_type == 'Point Load': end = start
+                    
                     loads_data.append({
                         'seg_idx': s_idx_num, 
                         'category': load_category,
                         'type': l_type, 
                         'dir': l_dir, 
-                        'start': 0.0, 
-                        'end': max_s, 
+                        'start': start, 
+                        'end': end, 
                         'w1': w1, 
                         'w2': w2_val
                     })
@@ -1134,7 +1159,7 @@ def render_advanced_shape_module():
                     is_dxf_strut = True
                     
                 if is_dxf_strut:
-                    st.success(f"🔒 DXF Strut Mapped: S{def_s_idx+1} at Dist {def_dist:.3f}m | Grnd ({def_gx:.2f}, {def_gy:.2f})")
+                    st.success(f"🔒 DXF Strut Mapped: S{def_s_idx+1}")
                     st_sec = st.selectbox(f"P{i+1} Type", strut_opts, index=strut_opts.index(master_strut) if master_strut in strut_opts else 0, key=f"st_sec_{i}", on_change=reset_adv_state)
                     struts_data.append({'seg_idx': def_s_idx, 's_dist': def_dist, 'gx': def_gx, 'gy': def_gy, 'sec': st_sec})
                 else:
@@ -1167,7 +1192,6 @@ def render_advanced_shape_module():
             styp = sp2.selectbox(f"Sup G{i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}", on_change=reset_adv_state)
             
             sup_dict = {'x': sx, 'y': def_sy, 'type': styp}
-            # لو لم يتم تغيير الـ X وكانت النقطة لامسة فريم في الكاد، نحافظ على مكانها الدقيق
             if dxf_seg_idx is not None and abs(sx - def_sx) < 1e-4:
                 sup_dict['seg_idx'] = dxf_seg_idx
                 sup_dict['s_dist'] = dxf_s_dist
@@ -1176,24 +1200,8 @@ def render_advanced_shape_module():
     combined_loads = []
     dead_loads_only = [l for l in loads_data if l.get('category') == 'Dead Load']
     live_loads_only = [l for l in loads_data if l.get('category') == 'Live Load']
-    
-    for s_idx in range(int(num_segs)):
-        s_dead = [l for l in dead_loads_only if l['seg_idx'] == s_idx]
-        s_live = [l for l in live_loads_only if l['seg_idx'] == s_idx]
-        w1_total = sum([l['w1'] for l in s_dead]) + sum([l['w1'] for l in s_live])
-        w2_total = sum([l['w2'] for l in s_dead]) + sum([l['w2'] for l in s_live])
-        
-        if w1_total > 0 or w2_total > 0:
-            max_s = float(segments[s_idx].get('L', 0.0))
-            combined_loads.append({
-                'seg_idx': s_idx,
-                'type': 'Uniform',
-                'dir': 'Gravity (Vertical ↓)',
-                'start': 0.0,
-                'end': max_s,
-                'w1': w1_total,
-                'w2': w2_total
-            })
+    combined_loads.extend(dead_loads_only)
+    combined_loads.extend(live_loads_only)
 
     nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, seg_sections, combined_loads, struts_data, None, base_sups, {'type': 'Hinged', 'angle': 0.0})
 
@@ -1207,7 +1215,7 @@ def render_advanced_shape_module():
     col_btn, col_blank = st.columns([1.5, 2.5])
     with col_btn:
         if st.button("🚀 Run Advanced Chain Analysis", type="primary", use_container_width=True):
-            with st.spinner("Generating Matrix & Solving (Combination: Dead + Live)..."):
+            with st.spinner("Generating Matrix & Solving..."):
                 U, R = solve_fea_engine(nodes, elements, nodal_loads, supports_list)
                 st.session_state.adv_fea_data = {
                     'U': U, 'R': R, 'nodes': nodes, 'elements': elements, 'display_nodes': display_nodes,
@@ -1216,7 +1224,7 @@ def render_advanced_shape_module():
                     'segments': segments, 'seg_starts': seg_starts
                 }
                 st.session_state.adv_solved = True
-            st.success("✅ Analysis Complete based on (Dead + Live) Combination!")
+            st.success("✅ Analysis Complete!")
             
     if st.session_state.adv_solved:
         st.markdown("### 🎛️ Analysis Results & Diagrams")
