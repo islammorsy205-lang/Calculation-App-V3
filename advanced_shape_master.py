@@ -79,12 +79,10 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
             color=arr_c, fontsize=7, fontname='Arial', ha='center', va='center')
 
 # =========================================================
-# 1. DXF Parsing Engine (BIM Integration - TempFile Method)
+# 1. DXF Parsing Engine (Absolute Precision & TempFile)
 # =========================================================
 def parse_dxf_to_data(file_bytes):
     if ezdxf is None: return None
-    
-    # 💡 الحل الجذري: حفظ الملف مؤقتاً لتجنب أخطاء التشفير والبيانات الثنائية في الذاكرة
     tmp_path = ""
     try:
         with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf") as tmp:
@@ -106,7 +104,6 @@ def parse_dxf_to_data(file_bytes):
             lyr = e.dxf.layer
             etype = e.dxftype()
             
-            # Supports
             if match_layer(lyr, "supp"):
                 if etype in ['POINT', 'CIRCLE', 'INSERT']:
                     if etype == 'POINT':
@@ -116,7 +113,6 @@ def parse_dxf_to_data(file_bytes):
                     elif etype == 'INSERT':
                         raw_supports.append({'x': e.dxf.insert.x, 'y': e.dxf.insert.y})
             
-            # Struts
             elif match_layer(lyr, "push") or match_layer(lyr, "pull"):
                 entities = [e]
                 if etype in ['LWPOLYLINE', 'POLYLINE']:
@@ -125,12 +121,10 @@ def parse_dxf_to_data(file_bytes):
                     if sub_e.dxftype() == 'LINE':
                         raw_struts.append({'p1': (sub_e.dxf.start.x, sub_e.dxf.start.y), 'p2': (sub_e.dxf.end.x, sub_e.dxf.end.y)})
                     
-            # Frames
             elif match_layer(lyr, "frame"):
                 entities = [e]
                 if etype in ['LWPOLYLINE', 'POLYLINE']:
                     entities = list(e.virtual_entities())
-                
                 for sub_e in entities:
                     if sub_e.dxftype() == 'LINE':
                         raw_frames.append({'type': 'line', 'p1': (sub_e.dxf.start.x, sub_e.dxf.start.y), 'p2': (sub_e.dxf.end.x, sub_e.dxf.end.y)})
@@ -145,122 +139,75 @@ def parse_dxf_to_data(file_bytes):
 
         if not raw_frames: return None
         
-        min_y = min(min(f['p1'][1], f['p2'][1]) for f in raw_frames)
-        real_frames = []
-        base_len = 0.0
-        for f in raw_frames:
-            if f['type'] == 'line':
-                if abs(f['p1'][1] - min_y) < 0.1 and abs(f['p2'][1] - min_y) < 0.1:
-                    bl = abs(f['p1'][0] - f['p2'][0])
-                    if bl > base_len: base_len = bl
-                    continue
-            real_frames.append(f)
-            
-        raw_frames = real_frames
-        if not raw_frames: return None
-
-        all_pts = []
-        for f in raw_frames: all_pts.extend([f['p1'], f['p2']])
-        start_pt = min(all_pts, key=lambda p: (round(p[1],2), round(p[0],2)))
-        
+        # 💡 ترجمة الخطوط والكيرفات باحداثياتها المطلقة بدون ربط إجباري
         chained_segs = []
-        curr_pt = start_pt
-        curr_th = None
-        used_idx = set()
-        
-        for _ in range(len(raw_frames)):
-            best_idx, best_dist, best_is_p1 = -1, 999.0, True
-            for i, f in enumerate(raw_frames):
-                if i in used_idx: continue
-                d1 = math.hypot(f['p1'][0]-curr_pt[0], f['p1'][1]-curr_pt[1])
-                d2 = math.hypot(f['p2'][0]-curr_pt[0], f['p2'][1]-curr_pt[1])
-                if d1 < best_dist: best_idx, best_dist, best_is_p1 = i, d1, True
-                if d2 < best_dist: best_idx, best_dist, best_is_p1 = i, d2, False
-                
-            if best_idx == -1 or best_dist > 0.5: break
-            used_idx.add(best_idx)
-            f = raw_frames[best_idx]
-            
-            p_start = f['p1'] if best_is_p1 else f['p2']
-            p_end = f['p2'] if best_is_p1 else f['p1']
-            
+        for f in raw_frames:
+            p_start = f['p1']
+            p_end = f['p2']
             if f['type'] == 'line':
                 dx, dy = p_end[0]-p_start[0], p_end[1]-p_start[1]
                 L = math.hypot(dx, dy)
                 ang = math.degrees(math.atan2(dy, dx))
-                smooth = False if curr_th is None else (abs((ang - curr_th + 180)%360 - 180) < 5.0)
-                chained_segs.append({'Shape Type': 'Straight Line', 'L': L, 'start_angle': ang, 'smooth': smooth})
-                curr_th = ang
-                curr_pt = p_end
+                chained_segs.append({
+                    'Shape Type': 'Straight Line', 'L': L, 'start_angle': ang, 
+                    'smooth': False, 'x0': p_start[0], 'y0': p_start[1], 'kappa': 0.0
+                })
             elif f['type'] == 'arc':
-                arc_p1 = (f['c'][0] + f['r']*math.cos(f['sa']), f['c'][1] + f['r']*math.sin(f['sa']))
-                is_ccw = math.hypot(p_start[0]-arc_p1[0], p_start[1]-arc_p1[1]) < 0.1
-                
-                ang_diff = (f['ea'] - f['sa']) % (2*math.pi)
-                if ang_diff == 0: ang_diff = 2*math.pi
+                sweep = (f['ea'] - f['sa']) % (2 * math.pi)
+                if sweep == 0: sweep = 2 * math.pi
+                L_arc = f['r'] * sweep
+                kappa = 1.0 / f['r']  # الكاد دائماً يرسم الكيرف عكس عقارب الساعة
+                start_ang_rad = f['sa'] + math.pi / 2
+                chained_segs.append({
+                    'Shape Type': 'Curve (Arc & Radius)', 'L': L_arc, 'Radius (R) (m)': f['r'], 
+                    'Curvature Direction': "Arching Up ⤴ (Concave)", # مجرد مسمى للواجهة
+                    'start_angle': math.degrees(start_ang_rad), 'smooth': False, 
+                    'x0': p_start[0], 'y0': p_start[1], 'kappa': kappa
+                })
 
-                if is_ccw:
-                    tangent_ang = f['sa'] + math.pi/2
-                    dir_crv = "Arching Up ⤴ (Concave)"
-                    L_arc = f['r'] * ang_diff
-                else:
-                    tangent_ang = f['ea'] - math.pi/2
-                    dir_crv = "Arching Down ⤵ (Convex)"
-                    ang_diff = 2*math.pi - ang_diff
-                    L_arc = f['r'] * ang_diff
-                    
-                tangent_deg = math.degrees(tangent_ang) % 360
-                smooth = False if curr_th is None else (abs((tangent_deg - curr_th + 180)%360 - 180) < 5.0)
-                
-                chained_segs.append({'Shape Type': 'Curve (Arc & Radius)', 'L': L_arc, 'Radius (R) (m)': f['r'], 'Curvature Direction': dir_crv, 'start_angle': tangent_deg, 'smooth': smooth})
-                curr_th = tangent_deg + math.degrees(ang_diff) if is_ccw else tangent_deg - math.degrees(ang_diff)
-                curr_pt = p_end
-
+        # 💡 إسقاط النهايز على الكيرفات الحقيقية بالمللي
         struts_mapped = []
         for s in raw_struts:
-            p_ground = s['p1'] if s['p1'][1] < s['p2'][1] else s['p2']
-            p_top = s['p2'] if s['p1'][1] < s['p2'][1] else s['p1']
-            
-            best_seg, best_s, min_d = 0, 0.0, 999.0
-            tr_x, tr_y = start_pt[0], start_pt[1]
-            tr_th = math.radians(chained_segs[0]['start_angle'])
+            best_seg, best_s, min_d, is_p1_top = 0, 0.0, 9999.0, True
             
             for idx, seg in enumerate(chained_segs):
                 L = seg['L']
-                if seg['Shape Type'] == 'Straight Line': kappa = 0.0
-                else:
-                    r_val = seg['Radius (R) (m)']
-                    kappa = -1.0/r_val if "Down" in seg['Curvature Direction'] else 1.0/r_val
+                kappa = seg['kappa']
+                th0 = math.radians(seg['start_angle'])
+                x0, y0 = seg['x0'], seg['y0']
                 
-                steps = max(10, int(L / 0.1))
+                steps = max(10, int(L / 0.05))
                 for step in range(steps + 1):
                     s_test = (step / steps) * L
-                    px, py, _ = get_parametric_point(tr_x, tr_y, tr_th, kappa, s_test)
-                    d = math.hypot(px - p_top[0], py - p_top[1])
-                    if d < min_d:
-                        min_d = d
-                        best_seg = idx
-                        best_s = s_test
-                
-                tr_x, tr_y, tr_th = get_parametric_point(tr_x, tr_y, tr_th, kappa, L)
-            
-            struts_mapped.append({'seg_idx': best_seg, 'dist': best_s, 'gx': p_ground[0] - start_pt[0]})
+                    px, py, _ = get_parametric_point(x0, y0, th0, kappa, s_test)
+                    
+                    d1 = math.hypot(px - s['p1'][0], py - s['p1'][1])
+                    d2 = math.hypot(px - s['p2'][0], py - s['p2'][1])
+                    
+                    if d1 < min_d: min_d = d1; best_seg = idx; best_s = s_test; is_p1_top = True
+                    if d2 < min_d: min_d = d2; best_seg = idx; best_s = s_test; is_p1_top = False
+                        
+            p_top = s['p1'] if is_p1_top else s['p2']
+            p_ground = s['p2'] if is_p1_top else s['p1']
+            struts_mapped.append({
+                'seg_idx': best_seg, 'dist': best_s, 
+                'gx': p_ground[0], 'gy': p_ground[1]
+            })
 
+        # 💡 الدعامات بنفس مكانها
         supps_mapped = []
         for sp in raw_supports:
-            supps_mapped.append({'x': sp['x'] - start_pt[0], 'type': 'Hinged'})
+            supps_mapped.append({'x': sp['x'], 'y': sp['y'], 'type': 'Hinged'})
 
-        return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped, 'base_length': base_len}
+        return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped}
         
     except Exception as e:
-        st.error(f"⚠️ حدث خطأ أثناء تحليل ملف الـ DXF. تأكد من أن الملف سليم. تفاصيل الخطأ: {e}")
+        st.error(f"⚠️ حدث خطأ أثناء تحليل ملف الـ DXF. تأكد من أن الملف سليم: {e}")
         return None
     finally:
         if tmp_path and os.path.exists(tmp_path):
-            try:
-                os.remove(tmp_path)
-            except:
-                pass
+            try: os.remove(tmp_path)
+            except: pass
 
 # =========================================================
 # 2. Geometry & Mesh Generators (Parametric Chain Engine)
@@ -296,11 +243,16 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
     key_nodes = set()
     
     for i, seg in enumerate(segments):
-        if i == 0 or not seg.get('smooth', True):
+        # 💡 احترام كامل للإحداثيات المطلقة إذا كانت مستوردة من DXF
+        if 'x0' in seg and 'y0' in seg:
+            curr_x, curr_y = seg['x0'], seg['y0']
             curr_th = np.radians(seg['start_angle'])
+        else:
+            if i == 0 or not seg.get('smooth', True):
+                curr_th = np.radians(seg['start_angle'])
             
         L = seg['L']
-        kappa = seg['kappa']
+        kappa = seg.get('kappa', 0.0)
         seg_start_data.append({'x0': curr_x, 'y0': curr_y, 'th0': curr_th, 'kappa': kappa})
         
         key_s_vals = [0.0, L]
@@ -397,12 +349,13 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
         seg_idx = st_item['seg_idx']
         dist = st_item['s_dist']
         gx = st_item['gx']
+        gy = st_item.get('gy', 0.0)
         
         s_data = seg_start_data[seg_idx]
         nx, ny, _ = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], dist)
         
         top_node = get_or_add_node(nx, ny)
-        bot_node = get_or_add_node(gx, 0.0)
+        bot_node = get_or_add_node(gx, gy)
         
         elements.append({
             'type': 'truss', 'group': 'strut', 'sec': st_item['sec'],
@@ -411,9 +364,9 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
         })
 
     supports_list = []
-    supports_list.append({'node': 0, 'type': corner_sup['type'], 'angle': corner_sup['angle']})
+    # Only add corner support if it's explicitly enabled (not None) or if we are in UI mode
     for sup in supports:
-        nid = get_or_add_node(sup['x'], 0.0)
+        nid = get_or_add_node(sup['x'], sup.get('y', 0.0))
         supports_list.append({'node': nid, 'type': sup['type'], 'angle': 0.0})
         
     display_nodes = set([s['node'] for s in supports_list])
@@ -555,7 +508,18 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
-            ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
+            if el.get('group') == 'segment' and segments and seg_starts:
+                s_idx = el['seg_idx']
+                seg = segments[s_idx]
+                s_data = seg_starts[s_idx]
+                curve_x, curve_y = [], []
+                for p in np.linspace(0, el['L'], 10):
+                    cx, cy, _ = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], p)
+                    curve_x.append(cx)
+                    curve_y.append(cy)
+                ax.plot(curve_x, curve_y, color='black', linestyle='-', linewidth=1.5, zorder=1)
+            else:
+                ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
             
     for sup in supports_list:
         n = sup['node']
@@ -909,6 +873,10 @@ def render_advanced_shape_module():
     uploaded_dxf = st.file_uploader("📥 Upload DXF File (.dxf)", type=['dxf'], key="dxf_uploader")
     
     if uploaded_dxf and st.button("Extract Data from DXF"):
+        # 💡 مسح الذاكرة القديمة بالكامل
+        if 'adv_solved' in st.session_state: st.session_state.adv_solved = False
+        st.session_state.dxf_parsed = None
+        
         dxf_data = parse_dxf_to_data(uploaded_dxf.getvalue())
         if dxf_data:
             st.session_state.dxf_parsed = dxf_data
@@ -931,8 +899,16 @@ def render_advanced_shape_module():
                 s_type_idx = 0
                 def_L, def_ang, def_R, def_S, def_smooth = 3.0, 60.0, 5.0, 3.0, True
                 dir_crv_idx = 0
+                
+                # 💡 سحب الإحداثيات المطلقة لو موجودة
+                x0, y0, exact_kappa = None, None, None
+                
                 if dxf_data and i < len(dxf_data['segments']):
                     d_seg = dxf_data['segments'][i]
+                    x0 = d_seg.get('x0', None)
+                    y0 = d_seg.get('y0', None)
+                    exact_kappa = d_seg.get('kappa', None)
+                    
                     if d_seg['Shape Type'] == 'Straight Line':
                         s_type_idx = 0
                         def_L = d_seg['L']
@@ -965,7 +941,11 @@ def render_advanced_shape_module():
                     r_val = st.number_input(f"Radius (R) (m) [S{i+1}]", value=float(def_R), step=0.5, key=f"r_{i}", on_change=reset_adv_state)
                     L = st.number_input(f"Arc Length (S) (m) [S{i+1}]", value=float(def_S), step=0.5, key=f"al_{i}", on_change=reset_adv_state)
                     dir_crv = st.selectbox(f"Curvature Direction [S{i+1}]", ["Arching Down ⤵ (Convex)", "Arching Up ⤴ (Concave)"], index=dir_crv_idx, key=f"d_{i}", on_change=reset_adv_state)
-                    kappa = -1.0/r_val if "Down" in dir_crv else 1.0/r_val
+                    
+                    if exact_kappa is not None and abs(r_val - (1.0/abs(exact_kappa) if exact_kappa != 0 else 999)) < 0.01:
+                        kappa = exact_kappa
+                    else:
+                        kappa = -1.0/r_val if "Down" in dir_crv else 1.0/r_val
                 else:
                     L_c = st.number_input(f"Chord Length (m) [S{i+1}]", value=4.0, step=0.5, key=f"c_{i}", on_change=reset_adv_state)
                     h = st.number_input(f"Rise (m) [S{i+1}]", value=1.0, step=0.1, key=f"h_{i}", on_change=reset_adv_state)
@@ -976,7 +956,11 @@ def render_advanced_shape_module():
                     kappa = -1.0/r_val if "Down" in dir_crv else 1.0/r_val
                     st.info(f"💡 Calculated Arc Length = {L:.2f} m | Radius = {r_val:.2f} m")
                 
-                segments.append({'type': s_type, 'L': L, 'kappa': kappa, 'smooth': smooth, 'start_angle': start_angle})
+                seg_info = {'type': s_type, 'L': L, 'kappa': kappa, 'smooth': smooth, 'start_angle': start_angle}
+                if x0 is not None and y0 is not None:
+                    seg_info['x0'] = x0
+                    seg_info['y0'] = y0
+                segments.append(seg_info)
 
         st.markdown("### 2. Properties & Sections")
         sec_list = list(SECTIONS_DB.keys()) if SECTIONS_DB else ["Soldier U100"]
@@ -1061,12 +1045,13 @@ def render_advanced_shape_module():
             with st.expander(f"📏 Strut P{i+1}", expanded=(num_struts<3)):
                 def_s_idx = 0
                 def_dist = float(segments[0]['L'])/2 if segments else 1.0
-                def_gx = 3.0
+                def_gx, def_gy = 3.0, 0.0
                 if dxf_data and i < len(dxf_data['struts']):
                     ds = dxf_data['struts'][i]
                     def_s_idx = ds['seg_idx']
                     def_dist = ds['dist']
                     def_gx = ds['gx']
+                    def_gy = ds.get('gy', 0.0)
                     
                 cc1, cc2, cc3, cc4 = st.columns(4)
                 s_idx = cc1.selectbox("On Seg No.", seg_choices, index=def_s_idx, key=f"st_s_{i}", on_change=reset_adv_state)
@@ -1074,16 +1059,13 @@ def render_advanced_shape_module():
                 dist = cc2.number_input("Arc Dist (m)", 0.0, float(segments[s_idx_num]['L']), value=float(def_dist), key=f"st_d_{i}", on_change=reset_adv_state)
                 gx = cc3.number_input("Ground X (m)", value=float(def_gx), step=0.5, key=f"st_gx_{i}", on_change=reset_adv_state)
                 st_sec = cc4.selectbox(f"P{i+1} Type", strut_opts, index=strut_opts.index(master_strut) if master_strut in strut_opts else 0, key=f"st_sec_{i}", on_change=reset_adv_state)
-                struts_data.append({'seg_idx': s_idx_num, 's_dist': dist, 'gx': gx, 'sec': st_sec})
+                struts_data.append({'seg_idx': s_idx_num, 's_dist': dist, 'gx': gx, 'gy': def_gy, 'sec': st_sec})
 
         st.markdown("### 5. Supports & Base System")
         bs1, bs2 = st.columns(2)
         base_sec_list = list(SECTIONS_DB.keys()) + ["None (Direct to Ground)"]
         base_def_idx = next((i for i, s in enumerate(base_sec_list) if 'SOLDIER' in s.upper()), 0)
         base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=base_def_idx, on_change=reset_adv_state)
-        
-        def_base_len = dxf_data['base_length'] if dxf_data else 0.0
-        base_length = bs2.number_input("Total Base Length (m) [Optional]", value=float(def_base_len), step=0.5, on_change=reset_adv_state)
         
         c_sup1, c_sup2 = st.columns(2)
         c_sup = c_sup1.selectbox("Corner Support (Node 0)", ["Hinged", "Roller", "Fixed"], on_change=reset_adv_state)
@@ -1094,14 +1076,15 @@ def render_advanced_shape_module():
         base_sups = []
         for i in range(int(num_base_sups)):
             sp1, sp2 = st.columns(2)
-            def_sx = float((i+1)*2.0)
+            def_sx, def_sy = float((i+1)*2.0), 0.0
             if dxf_data and i < len(dxf_data['supports']):
                 def_sx = dxf_data['supports'][i]['x']
+                def_sy = dxf_data['supports'][i].get('y', 0.0)
             sx = sp1.number_input(f"Sup G{i+1} X (m)", value=float(def_sx), on_change=reset_adv_state, key=f"sx_{i}")
             styp = sp2.selectbox(f"Sup G{i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}", on_change=reset_adv_state)
-            base_sups.append({'x': sx, 'type': styp})
+            base_sups.append({'x': sx, 'y': def_sy, 'type': styp})
 
-    nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, seg_sections, loads_data, struts_data, base_sec, base_sups, {'type': c_sup, 'angle': c_ang}, base_length)
+    nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, seg_sections, loads_data, struts_data, base_sec, base_sups, {'type': c_sup, 'angle': c_ang})
 
     with c_plot:
         st.markdown("<h3 style='text-align: center; border-bottom: 2px solid #ddd; padding-bottom: 10px; font-family: Arial; color: #1e3d59;'>Live Geometry & Assignments</h3>", unsafe_allow_html=True)
