@@ -96,38 +96,65 @@ def parse_dxf_to_data(file_bytes):
         
         for e in msp:
             lyr = e.dxf.layer
-            
-            # Supports (Points)
+            # 💡 Supports (Points, Circles, Blocks)
             if match_layer(lyr, "supp"):
-                if e.dxftype() == 'POINT':
-                    raw_supports.append({'x': e.dxf.location.x, 'y': e.dxf.location.y})
+                if e.dxftype() in ['POINT', 'CIRCLE', 'INSERT']:
+                    if e.dxftype() == 'POINT':
+                        raw_supports.append({'x': e.dxf.location.x, 'y': e.dxf.location.y})
+                    elif e.dxftype() == 'CIRCLE':
+                        raw_supports.append({'x': e.dxf.center.x, 'y': e.dxf.center.y})
+                    elif e.dxftype() == 'INSERT':
+                        raw_supports.append({'x': e.dxf.insert.x, 'y': e.dxf.insert.y})
             
-            # Struts (Push Pulls)
+            # 💡 Struts (Lines or Polylines)
             elif match_layer(lyr, "push") or match_layer(lyr, "pull"):
-                if e.dxftype() == 'LINE':
-                    raw_struts.append({'p1': (e.dxf.start.x, e.dxf.start.y), 'p2': (e.dxf.end.x, e.dxf.end.y)})
+                entities = [e]
+                if e.dxftype() in ['LWPOLYLINE', 'POLYLINE']:
+                    entities = list(e.virtual_entities())
+                for sub_e in entities:
+                    if sub_e.dxftype() == 'LINE':
+                        raw_struts.append({'p1': (sub_e.dxf.start.x, sub_e.dxf.start.y), 'p2': (sub_e.dxf.end.x, sub_e.dxf.end.y)})
                     
-            # Frames (Lines & Arcs)
+            # 💡 Frames (Lines, Arcs, Polylines)
             elif match_layer(lyr, "frame"):
-                if e.dxftype() == 'LINE':
-                    raw_frames.append({'type': 'line', 'p1': (e.dxf.start.x, e.dxf.start.y), 'p2': (e.dxf.end.x, e.dxf.end.y)})
-                elif e.dxftype() == 'ARC':
-                    c = e.dxf.center
-                    r = e.dxf.radius
-                    sa = math.radians(e.dxf.start_angle)
-                    ea = math.radians(e.dxf.end_angle)
-                    p1 = (c.x + r*math.cos(sa), c.y + r*math.sin(sa))
-                    p2 = (c.x + r*math.cos(ea), c.y + r*math.sin(ea))
-                    raw_frames.append({'type': 'arc', 'p1': p1, 'p2': p2, 'c': (c.x, c.y), 'r': r, 'sa': sa, 'ea': ea})
+                entities = [e]
+                if e.dxftype() in ['LWPOLYLINE', 'POLYLINE']:
+                    entities = list(e.virtual_entities())
+                
+                for sub_e in entities:
+                    if sub_e.dxftype() == 'LINE':
+                        raw_frames.append({'type': 'line', 'p1': (sub_e.dxf.start.x, sub_e.dxf.start.y), 'p2': (sub_e.dxf.end.x, sub_e.dxf.end.y)})
+                    elif sub_e.dxftype() == 'ARC':
+                        c = sub_e.dxf.center
+                        r = sub_e.dxf.radius
+                        sa = math.radians(sub_e.dxf.start_angle)
+                        ea = math.radians(sub_e.dxf.end_angle)
+                        p1 = (c.x + r*math.cos(sa), c.y + r*math.sin(sa))
+                        p2 = (c.x + r*math.cos(ea), c.y + r*math.sin(ea))
+                        raw_frames.append({'type': 'arc', 'p1': p1, 'p2': p2, 'c': (c.x, c.y), 'r': r, 'sa': sa, 'ea': ea})
 
-        # 💡 Smart Sorting & Chaining for Frames
         if not raw_frames: return None
         
-        # Find bottom-leftmost point to start
+        # 💡 Separate Base Horizontal Line from Inclined Frames
+        min_y = min(min(f['p1'][1], f['p2'][1]) for f in raw_frames)
+        real_frames = []
+        base_len = 0.0
+        for f in raw_frames:
+            if f['type'] == 'line':
+                # Check if it's perfectly horizontal and at the bottom
+                if abs(f['p1'][1] - min_y) < 0.1 and abs(f['p2'][1] - min_y) < 0.1:
+                    bl = abs(f['p1'][0] - f['p2'][0])
+                    if bl > base_len: base_len = bl
+                    continue
+            real_frames.append(f)
+            
+        raw_frames = real_frames
+        if not raw_frames: return None
+
+        # 💡 Find bottom-leftmost point to start chaining
         all_pts = []
-        for f in raw_frames: 
-            all_pts.extend([f['p1'], f['p2']])
-        start_pt = min(all_pts, key=lambda p: (round(p[0],2), round(p[1],2)))
+        for f in raw_frames: all_pts.extend([f['p1'], f['p2']])
+        start_pt = min(all_pts, key=lambda p: (round(p[1],2), round(p[0],2)))
         
         chained_segs = []
         curr_pt = start_pt
@@ -154,74 +181,78 @@ def parse_dxf_to_data(file_bytes):
                 dx, dy = p_end[0]-p_start[0], p_end[1]-p_start[1]
                 L = math.hypot(dx, dy)
                 ang = math.degrees(math.atan2(dy, dx))
-                smooth = False if curr_th is None else (abs(ang - curr_th) < 5.0)
+                smooth = False if curr_th is None else (abs((ang - curr_th + 180)%360 - 180) < 5.0)
                 chained_segs.append({'Shape Type': 'Straight Line', 'L': L, 'start_angle': ang, 'smooth': smooth})
                 curr_th = ang
                 curr_pt = p_end
             elif f['type'] == 'arc':
-                # Arc math approximation
-                dx, dy = p_end[0]-p_start[0], p_end[1]-p_start[1]
-                chord = math.hypot(dx, dy)
-                ang_chord = math.degrees(math.atan2(dy, dx))
+                arc_p1 = (f['c'][0] + f['r']*math.cos(f['sa']), f['c'][1] + f['r']*math.sin(f['sa']))
+                is_ccw = math.hypot(p_start[0]-arc_p1[0], p_start[1]-arc_p1[1]) < 0.1
                 
-                # Check cross product to determine convexity (up/down)
-                v_chord = (dx, dy)
-                v_rad = (f['c'][0]-p_start[0], f['c'][1]-p_start[1])
-                cross = v_chord[0]*v_rad[1] - v_chord[1]*v_rad[0]
-                dir_crv = "Arching Up ⤴ (Concave)" if cross > 0 else "Arching Down ⤵ (Convex)"
+                ang_diff = (f['ea'] - f['sa']) % (2*math.pi)
+                if ang_diff == 0: ang_diff = 2*math.pi
+
+                if is_ccw:
+                    tangent_ang = f['sa'] + math.pi/2
+                    dir_crv = "Arching Up ⤴ (Concave)"
+                    L_arc = f['r'] * ang_diff
+                else:
+                    tangent_ang = f['ea'] - math.pi/2
+                    dir_crv = "Arching Down ⤵ (Convex)"
+                    ang_diff = 2*math.pi - ang_diff
+                    L_arc = f['r'] * ang_diff
+                    
+                tangent_deg = math.degrees(tangent_ang) % 360
+                smooth = False if curr_th is None else (abs((tangent_deg - curr_th + 180)%360 - 180) < 5.0)
                 
-                L_arc = f['r'] * abs(f['ea'] - f['sa'])
-                if L_arc == 0: L_arc = chord
-                
-                smooth = False if curr_th is None else True # Assume smooth for arcs usually
-                start_ang_arc = ang_chord # Approx
-                chained_segs.append({'Shape Type': 'Curve (Arc & Radius)', 'L': L_arc, 'Radius (R) (m)': f['r'], 'Curvature Direction': dir_crv, 'start_angle': start_ang_arc, 'smooth': smooth})
-                curr_th = ang_chord # Approx next angle
+                chained_segs.append({'Shape Type': 'Curve (Arc & Radius)', 'L': L_arc, 'Radius (R) (m)': f['r'], 'Curvature Direction': dir_crv, 'start_angle': tangent_deg, 'smooth': smooth})
+                curr_th = tangent_deg + math.degrees(ang_diff) if is_ccw else tangent_deg - math.degrees(ang_diff)
                 curr_pt = p_end
 
-        # Map Struts
+        # 💡 Map Struts (Advanced projection)
         struts_mapped = []
         for s in raw_struts:
             p_ground = s['p1'] if s['p1'][1] < s['p2'][1] else s['p2']
             p_top = s['p2'] if s['p1'][1] < s['p2'][1] else s['p1']
             
-            # Very basic mapping: Find nearest frame start point to determine segment
-            # In a real heavy CAD engine, this requires intersection math. Here we approximate by X coords.
-            best_seg, best_s_dist = 0, 0.0
-            curr_x_trace = start_pt[0]
+            best_seg, best_s, min_d = 0, 0.0, 999.0
+            tr_x, tr_y = start_pt[0], start_pt[1]
+            tr_th = math.radians(chained_segs[0]['start_angle'])
+            
             for idx, seg in enumerate(chained_segs):
-                if curr_x_trace <= p_top[0] <= curr_x_trace + seg['L']:
-                    best_seg = idx
-                    best_s_dist = abs(p_top[0] - curr_x_trace) # Approx Arc Dist
-                    break
-                curr_x_trace += seg['L']
-            struts_mapped.append({'seg_idx': best_seg, 'dist': best_s_dist, 'gx': p_ground[0] - start_pt[0]})
+                L = seg['L']
+                if seg['Shape Type'] == 'Straight Line': kappa = 0.0
+                else:
+                    r_val = seg['Radius (R) (m)']
+                    kappa = -1.0/r_val if "Down" in seg['Curvature Direction'] else 1.0/r_val
+                
+                steps = max(10, int(L / 0.1))
+                for step in range(steps + 1):
+                    s_test = (step / steps) * L
+                    px, py, _ = get_parametric_point(tr_x, tr_y, tr_th, kappa, s_test)
+                    d = math.hypot(px - p_top[0], py - p_top[1])
+                    if d < min_d:
+                        min_d = d
+                        best_seg = idx
+                        best_s = s_test
+                
+                tr_x, tr_y, tr_th = get_parametric_point(tr_x, tr_y, tr_th, kappa, L)
+            
+            struts_mapped.append({'seg_idx': best_seg, 'dist': best_s, 'gx': p_ground[0] - start_pt[0]})
 
-        # Map Supports
+        # 💡 Map Supports
         supps_mapped = []
         for sp in raw_supports:
             supps_mapped.append({'x': sp['x'] - start_pt[0], 'type': 'Hinged'})
 
-        return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped}
+        return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped, 'base_length': base_len}
         
     except Exception as e:
         return None
 
-
 # =========================================================
 # 2. Geometry & Mesh Generators (Parametric Chain Engine)
 # =========================================================
-def get_parametric_point(x0, y0, th0, kappa, s):
-    if abs(kappa) < 1e-6: 
-        x = x0 + s * np.cos(th0)
-        y = y0 + s * np.sin(th0)
-        th = th0
-    else: 
-        x = x0 + (np.sin(th0 + kappa * s) - np.sin(th0)) / kappa
-        y = y0 - (np.cos(th0 + kappa * s) - np.cos(th0)) / kappa
-        th = th0 + kappa * s
-    return x, y, th
-
 def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, corner_sup, base_length=0.0):
     nodes = []
     elements = []
@@ -891,7 +922,6 @@ def render_advanced_shape_module():
         segments = []
         for i in range(int(num_segs)):
             with st.expander(f"⚙️ Segment {i+1}", expanded=True):
-                # Auto-fill logic from DXF
                 s_type_idx = 0
                 def_L, def_ang, def_R, def_S, def_smooth = 3.0, 60.0, 5.0, 3.0, True
                 dir_crv_idx = 0
@@ -1040,7 +1070,8 @@ def render_advanced_shape_module():
         base_def_idx = next((i for i, s in enumerate(base_sec_list) if 'SOLDIER' in s.upper()), 0)
         base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=base_def_idx, on_change=reset_adv_state)
         
-        base_length = bs2.number_input("Total Base Length (m) [Optional]", value=0.0, step=0.5, on_change=reset_adv_state)
+        def_base_len = dxf_data['base_length'] if dxf_data else 0.0
+        base_length = bs2.number_input("Total Base Length (m) [Optional]", value=float(def_base_len), step=0.5, on_change=reset_adv_state)
         
         c_sup1, c_sup2 = st.columns(2)
         c_sup = c_sup1.selectbox("Corner Support (Seg 1 Start)", ["Hinged", "Roller", "Fixed"], on_change=reset_adv_state)
