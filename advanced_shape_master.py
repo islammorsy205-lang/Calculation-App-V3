@@ -79,7 +79,7 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
             color=arr_c, fontsize=7, fontname='Arial', ha='center', va='center')
 
 # =========================================================
-# 1. DXF Parsing Engine (Absolute Translation to J1 = 0,0)
+# 1. DXF Parsing Engine (Absolute Translation & Axis Normalization)
 # =========================================================
 def parse_dxf_to_data(file_bytes):
     if ezdxf is None: return None
@@ -142,7 +142,6 @@ def parse_dxf_to_data(file_bytes):
 
         # 💡 نقل الرسمة بالكامل بحيث تكون J1 في (0,0)
         if raw_supports:
-            # أول دعامة (J1) يتم تحديدها كأقصى دعامة لليسار
             raw_supports.sort(key=lambda s: s['x'])
             dx = -raw_supports[0]['x']
             dy = -raw_supports[0]['y']
@@ -171,6 +170,10 @@ def parse_dxf_to_data(file_bytes):
         for f in raw_frames:
             if f['type'] == 'line':
                 p_start, p_end = f['p1'], f['p2']
+                # 💡 توحيد اتجاه المحاور المحلية (من اليسار لليمين، أو من أسفل لأعلى) لضمان التماثل
+                if p_start[0] > p_end[0] + 1e-5 or (abs(p_start[0] - p_end[0]) < 1e-5 and p_start[1] > p_end[1]):
+                    p_start, p_end = p_end, p_start
+                    
                 dx_line, dy_line = p_end[0]-p_start[0], p_end[1]-p_start[1]
                 L = math.hypot(dx_line, dy_line)
                 ang = math.degrees(math.atan2(dy_line, dx_line))
@@ -412,22 +415,25 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
                         wa = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j] - ld['start']) / L_ld
                         wb = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j+1] - ld['start']) / L_ld
                         
-                        # 💡 التنفيذ الدقيق للإشارات والمحاور X و Z
-                        if 'Global Z' in ld['dir']:
+                        # 💡 التحليل الرياضي الجذري لتحويل الأحمال الرأسية/الأفقية إلى مركبات محلية للقطاع
+                        if 'Global Z' in ld['dir'] or 'Global Y' in ld['dir']:
+                            # حمل الجاذبية يحلل لمحوري وعمودي
+                            p_x1 += wa * s_t; p_y1 += wa * c_t
+                            p_x2 += wb * s_t; p_y2 += wb * c_t
+                        elif 'Global X' in ld['dir']:
+                            # حمل أفقي
+                            p_x1 += wa * c_t; p_y1 -= wa * s_t
+                            p_x2 += wb * c_t; p_y2 -= wb * s_t
+                        else: # Local Z
                             p_x1 += 0.0; p_y1 += wa
                             p_x2 += 0.0; p_y2 += wb
-                        elif 'Global X' in ld['dir']:
-                            p_x1 += wa; p_y1 += 0.0
-                            p_x2 += wb; p_y2 += 0.0
-                        else: # Local Z
-                            p_x1 -= wa * s_t; p_y1 += wa * c_t
-                            p_x2 -= wb * s_t; p_y2 += wb * c_t
                             
             elements.append({
                 'type': 'frame', 'group': 'segment', 'sec': sec_props['name'],
                 'n1': n1, 'n2': n2, 'px1': p_x1, 'py1': p_y1, 'px2': p_x2, 'py2': p_y2,
                 'E': sec_props['E'] * 10000.0, 'A': sec_props['A'], 'I': sec_props['I'] / 100000000.0,
-                'seg_idx': i, 's_start': keys[j], 's_end': keys[j+1], 'L': keys[j+1] - keys[j]
+                'seg_idx': i, 's_start': keys[j], 's_end': keys[j+1], 'L': keys[j+1] - keys[j],
+                'th_mid': th_mid
             })
             
         for ld in loads:
@@ -435,7 +441,7 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
                 try:
                     idx = keys.index(round(ld['start'], 4))
                     nid = node_indices[idx]
-                    if 'Global Z' in ld['dir']:
+                    if 'Global Z' in ld['dir'] or 'Global Y' in ld['dir']:
                         nodal_loads.append({'node': nid, 'Fx': 0.0, 'Fy': ld['w1']})
                     elif 'Global X' in ld['dir']:
                         nodal_loads.append({'node': nid, 'Fx': ld['w1'], 'Fy': 0.0})
@@ -637,7 +643,6 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
         x, y = nodes[n][0], nodes[n][1]
         t = sup['type']
         
-        # 💡 رسم اسم الدعامة J تحتها
         ax.text(x, y - 0.4, f"J{i+1}", color='green', fontsize=7, ha='center', fontname='Arial')
         
         if t == 'Fixed':
@@ -707,8 +712,7 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
             w_val = w_curr * scale_ld
             poly_pts.append((px, py))
             
-            # 💡 رسم الأسهم بالاتجاهات الهندسية الدقيقة
-            if 'Global Z' in ld.get('dir', ''):
+            if 'Global Z' in ld.get('dir', '') or 'Global Y' in ld.get('dir', ''):
                 f_vx, f_vy = 0.0, w_val
             elif 'Global X' in ld.get('dir', ''):
                 f_vx, f_vy = w_val, 0.0
@@ -730,7 +734,7 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
                 w_curr = w1 + frac * (w2 - w1)
                 w_val = w_curr * scale_ld
                 
-                if 'Global Z' in ld.get('dir', ''):
+                if 'Global Z' in ld.get('dir', '') or 'Global Y' in ld.get('dir', ''):
                     f_vx, f_vy = 0.0, w_val
                 elif 'Global X' in ld.get('dir', ''):
                     f_vx, f_vy = w_val, 0.0
@@ -742,7 +746,7 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
 
             px1, py1, th1 = eval_seg_point(segments[i], ld.get('start', 0), s_data)
             w_val_1 = w1 * scale_ld
-            if 'Global Z' in ld.get('dir', ''): f_vx, f_vy = 0.0, w_val_1
+            if 'Global Z' in ld.get('dir', '') or 'Global Y' in ld.get('dir', ''): f_vx, f_vy = 0.0, w_val_1
             elif 'Global X' in ld.get('dir', ''): f_vx, f_vy = w_val_1, 0.0
             else:
                 c_t, s_t = math.cos(th1), math.sin(th1)
@@ -751,7 +755,7 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
 
             px2, py2, th2 = eval_seg_point(segments[i], ld.get('end', 0), s_data)
             w_val_2 = w2 * scale_ld
-            if 'Global Z' in ld.get('dir', ''): f_vx, f_vy = 0.0, w_val_2
+            if 'Global Z' in ld.get('dir', '') or 'Global Y' in ld.get('dir', ''): f_vx, f_vy = 0.0, w_val_2
             elif 'Global X' in ld.get('dir', ''): f_vx, f_vy = w_val_2, 0.0
             else:
                 c_t, s_t = math.cos(th2), math.sin(th2)
@@ -986,7 +990,7 @@ def reset_adv_state():
 def render_advanced_shape_module():
     st.markdown("## 🎢 The Chain Builder (Multi-Segment & CAD Integration)")
     
-    st.info("💡 **Tip:** استخدم `Ctrl+Z` داخل أي مربع أرقام أو نصوص للتراجع عن آخر تعديل كتبته. (متوفر من المتصفح تلقائياً)")
+    st.info("💡 **Tip:** استخدم `Ctrl+Z` داخل أي مربع أرقام أو نصوص للتراجع عن آخر تعديل كتبته. (مفعلة تلقائياً)")
 
     if 'adv_solved' not in st.session_state:
         st.session_state.adv_solved = False
@@ -1015,7 +1019,6 @@ def render_advanced_shape_module():
         num_segs = st.number_input("Number of Segments in Chain", min_value=1, max_value=20, value=len(dxf_data['segments']) if dxf_data else 1, on_change=reset_adv_state)
         seg_choices = [f"S{i+1}" for i in range(int(num_segs))]
         
-        # 💡 تم نقل الدعامات لأعلى الواجهة لتسهيل التعديل
         st.markdown("### 1. Supports & Base System")
         def_supp_count = len(dxf_data['supports']) if dxf_data else 2
         num_base_sups = st.number_input("Count of Point Supports", 0, 50, def_supp_count, on_change=reset_adv_state)
@@ -1220,7 +1223,8 @@ def render_advanced_shape_module():
             return 5
         strut_opts = sorted(raw_struts, key=strut_priority)
         
-        # 💡 دالة لحساب الطول الفعلي قبل إظهار الخيارات
+        master_strut = st.selectbox("Master Strut Type", strut_opts, on_change=reset_adv_state)
+        
         def get_approx_xy(segs, s_idx, s_val):
             if s_idx < 0 or s_idx >= len(segs): return 0.0, 0.0
             seg = segs[s_idx]
@@ -1264,7 +1268,6 @@ def render_advanced_shape_module():
                     is_dxf_strut = True
                     
                 if is_dxf_strut:
-                    # 💡 حساب الطول والفلترة الذكية
                     nx, ny = get_approx_xy(segments, def_s_idx, def_dist)
                     actual_L = math.hypot(def_gx - nx, def_gy - ny)
                     st.success(f"🔒 DXF Strut Mapped: S{def_s_idx+1} | Length: {actual_L:.2f}m")
