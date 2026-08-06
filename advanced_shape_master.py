@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 import io
 import os
+import re
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
@@ -31,7 +32,6 @@ def apply_plot_styles():
     mpl.rcParams['font.weight'] = 'normal'
 
 def get_short_name(sec_name):
-    import re
     return re.sub(r'\s*\(.*?\)', '', sec_name).strip()
 
 def safe_render_fig(fig):
@@ -45,7 +45,7 @@ def safe_render_fig(fig):
 
 def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
     if abs(force_mag) < 0.1: return
-    arr_L = 0.8
+    arr_L = 0.5  # 💡 تصغير طول السهم ليكون أنيق ومناسب
     sgn = np.sign(force_mag)
     dx = sgn * axis_nx
     dy = sgn * axis_ny
@@ -53,9 +53,10 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
     start_y = node_y - arr_L * dy
     arr_c = 'blue' if force_mag >= 0 else 'red'
     ax.arrow(start_x, start_y, arr_L*dx, arr_L*dy, length_includes_head=True, 
-             head_width=0.15, head_length=0.2, fc=arr_c, ec=arr_c, lw=1.0, zorder=5)
-    ax.text(start_x - 0.25*dx, start_y - 0.25*dy, f"{abs(force_mag):.1f}", 
-            color='black', fontsize=7, fontname='Arial', ha='center', va='center')
+             head_width=0.08, head_length=0.12, fc=arr_c, ec=arr_c, lw=0.8, zorder=5)
+    # 💡 تلوين النص بنفس لون السهم ووضع علامة الموجب/السالب
+    ax.text(start_x - 0.15*dx, start_y - 0.15*dy, f"{force_mag:+.1f}", 
+            color=arr_c, fontsize=7, fontname='Arial', ha='center', va='center')
 
 # =========================================================
 # 1. Geometry & Mesh Generators (Parametric Chain Engine)
@@ -88,6 +89,8 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
     curr_x, curr_y = 0.0, 0.0
     curr_th = np.radians(corner_sup.get('angle', 0.0)) 
     
+    key_nodes = set()
+    
     for i, seg in enumerate(segments):
         if i == 0 or not seg.get('smooth', True):
             curr_th = np.radians(seg['start_angle'])
@@ -96,14 +99,15 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
         kappa = seg['kappa']
         seg_start_data.append({'x0': curr_x, 'y0': curr_y, 'th0': curr_th, 'kappa': kappa})
         
-        keys = [0.0, L]
+        key_s_vals = [0.0, L]
         for st_item in struts:
-            if st_item['seg_idx'] == i: keys.append(st_item['s_dist'])
+            if st_item['seg_idx'] == i: key_s_vals.append(st_item['s_dist'])
         for ld in loads:
             if ld['seg_idx'] == i:
-                keys.append(ld['start'])
-                keys.append(ld['end'])
+                key_s_vals.append(ld['start'])
+                key_s_vals.append(ld['end'])
         
+        keys = list(key_s_vals)
         num_sub = max(1, int(np.ceil(L / 0.25)))
         for p in np.linspace(0, L, num_sub+1): keys.append(p)
             
@@ -112,7 +116,11 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
         node_indices = []
         for s_val in keys:
             px, py, _ = get_parametric_point(curr_x, curr_y, curr_th, kappa, s_val)
-            node_indices.append(get_or_add_node(px, py))
+            nid = get_or_add_node(px, py)
+            node_indices.append(nid)
+            # 💡 حفظ نقط التغير المهمة لرسم القيم عندها لاحقاً
+            if any(abs(s_val - kv) < 1e-4 for kv in key_s_vals):
+                key_nodes.add(nid)
             
         for j in range(len(keys)-1):
             n1, n2 = node_indices[j], node_indices[j+1]
@@ -204,7 +212,7 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
         supports_list.append({'node': nid, 'type': sup['type'], 'angle': 0.0})
         
     display_nodes = set([s['node'] for s in supports_list])
-    display_nodes.add(len(nodes)-1) 
+    display_nodes.update(key_nodes) 
 
     return nodes, elements, nodal_loads, display_nodes, supports_list, seg_start_data
 
@@ -313,7 +321,7 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
             ])
             f_end = k_loc @ u_loc - f_loc
             
-            xs = np.linspace(0, L, 51) 
+            xs = np.linspace(0, L, 11) 
             N_arr, V_arr, M_arr, v_rel_arr = np.zeros_like(xs), np.zeros_like(xs), np.zeros_like(xs), np.zeros_like(xs)
             v1, theta1, v2, theta2 = u_loc[1], u_loc[2], u_loc[4], u_loc[5]
             
@@ -334,19 +342,12 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
 # =========================================================
 # 3. Plotting Engine (Live Preview & SAP2000 Style)
 # =========================================================
-def draw_base_geometry(ax, nodes, elements, supports_list):
+def draw_base_geometry(ax, nodes, elements, supports_list, sec_name=None, segments=None, seg_starts=None):
     for el in elements:
         if 'L' not in el and el['type'] != 'truss': continue
         n1, n2 = nodes[el['n1']], nodes[el['n2']]
         if el['type'] == 'truss':
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
-            mid_x, mid_y = (n1[0]+n2[0])/2, (n1[1]+n2[1])/2
-            dx, dy = n2[0]-n1[0], n2[1]-n1[1]
-            rot = np.degrees(np.arctan2(dy, dx))
-            L_hyp = np.hypot(dx, dy)
-            if L_hyp > 1e-4:
-                nx_s, ny_s = -dy/L_hyp, dx/L_hyp
-                ax.text(mid_x + nx_s*0.2, mid_y + ny_s*0.2, get_short_name(el.get('sec', '')), color='black', fontsize=6, rotation=rot, ha='center', va='center')
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
@@ -361,7 +362,7 @@ def draw_base_geometry(ax, nodes, elements, supports_list):
         nx, ny = np.sin(rad), -np.cos(rad) 
         tx, ty = -ny, nx 
         
-        # 💡 تصغير حجم الدعامات بنسبة 50%
+        # 💡 تصغير الدعامات بنسبة 50% كما طلبت
         if t == 'Fixed':
             ax.plot(x, y, marker='s', markerfacecolor='none', markeredgecolor='limegreen', markersize=3, zorder=5)
             ax.plot([x - 0.1*tx, x + 0.1*tx], [y - 0.1*ty, y + 0.1*ty], color='limegreen', lw=1.5, zorder=4)
@@ -386,15 +387,35 @@ def draw_base_geometry(ax, nodes, elements, supports_list):
             lx2, ly2 = x + base_dist*nx + line_w*tx, y + base_dist*ny + line_w*ty
             ax.plot([lx1, lx2], [ly1, ly2], color='limegreen', lw=1.2, zorder=4)
 
-def draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads, segments, seg_starts):
-    draw_base_geometry(ax, nodes, elements, supports_list)
-    short_name = get_short_name(sec_name)
+    # 💡 توقيع الأسماء بشكل موازي وقريب جداً (في جميع الدياجرامات)
+    if sec_name and segments and seg_starts:
+        short_name = get_short_name(sec_name)
+        # أسماء النهايز
+        for el in elements:
+            if el['type'] == 'truss':
+                n1, n2 = nodes[el['n1']], nodes[el['n2']]
+                mid_x, mid_y = (n1[0]+n2[0])/2, (n1[1]+n2[1])/2
+                dx, dy = n2[0]-n1[0], n2[1]-n1[1]
+                rot = np.degrees(np.arctan2(dy, dx))
+                if rot > 90: rot -= 180
+                elif rot < -90: rot += 180
+                L_hyp = np.hypot(dx, dy)
+                if L_hyp > 1e-4:
+                    nx_s, ny_s = -dy/L_hyp, dx/L_hyp
+                    ax.text(mid_x + nx_s*0.08, mid_y + ny_s*0.08, get_short_name(el.get('sec', '')), 
+                            color='dimgray', fontsize=6, rotation=rot, ha='center', va='center', fontname='Arial')
+        # أسماء القطع العلوية
+        for i, seg in enumerate(segments):
+            s_data = seg_starts[i]
+            mx, my, mth = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], seg['L']/2)
+            rot_deg = np.degrees(mth)
+            if rot_deg > 90: rot_deg -= 180
+            elif rot_deg < -90: rot_deg += 180
+            ax.text(mx - np.sin(mth)*0.08, my + np.cos(mth)*0.08, f"{short_name} (L={seg['L']:.2f}m)", 
+                    color='dimgray', fontsize=6, ha='center', va='center', rotation=rot_deg, fontname='Arial')
 
-    for i, seg in enumerate(segments):
-        s_data = seg_starts[i]
-        mx, my, mth = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], seg['L']/2)
-        # 💡 تقريب النص للخط المائل وموازاته
-        ax.text(mx - np.sin(mth)*0.15, my + np.cos(mth)*0.15, f"{short_name} (L={seg['L']:.2f}m)", color='black', fontsize=7, ha='center', va='center', rotation=np.degrees(mth))
+def draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads, segments, seg_starts):
+    draw_base_geometry(ax, nodes, elements, supports_list, sec_name, segments, seg_starts)
 
     scale_ld = 0.05
     for ld in loads:
@@ -426,9 +447,23 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads,
                 hx1, hy1 = px1 - s1 * w1 * scale_ld, py1 + c1 * w1 * scale_ld
                 hx2, hy2 = px2 - s2 * w2 * scale_ld, py2 + c2 * w2 * scale_ld
                 
-            # 💡 التظليل الخارجي المقفول فقط بدون تهشير داخلي
-            ax.add_patch(Polygon([(px1,py1), (hx1,hy1), (hx2,hy2), (px2,py2)], facecolor='royalblue', edgecolor='blue', alpha=0.3, zorder=2))
+            # 💡 إلغاء التهشير الصلب وعمل إطار خارجي مغلق نظيف
+            ax.add_patch(Polygon([(px1,py1), (hx1,hy1), (hx2,hy2), (px2,py2)], facecolor='none', edgecolor='blue', lw=0.8, zorder=2))
             
+            # 💡 رسم أسهم خفيفة كل مسافة كبيرة
+            num_arrows = max(2, int(np.hypot(px2-px1, py2-py1) / 0.8))
+            for k in range(1, num_arrows):
+                frac = k / num_arrows
+                s_curr = ld['start'] + frac * (ld['end'] - ld['start'])
+                w_curr = w1 + frac * (w2 - w1)
+                px_c, py_c, th_c = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], s_curr)
+                hl = w_curr * scale_ld
+                if ld['dir'] == 'Gravity (Vertical ↓)':
+                    ax.arrow(px_c, py_c + hl, 0, -hl, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.3, zorder=3)
+                else:
+                    c_c, s_c = np.cos(th_c), np.sin(th_c)
+                    ax.arrow(px_c - s_c*hl, py_c + c_c*hl, s_c*hl, -c_c*hl, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.3, zorder=3)
+
             ax.text(hx1, hy1+0.2, f"{w1}", color='blue', fontsize=6, ha='center')
             ax.text(hx2, hy2+0.2, f"{w2}", color='blue', fontsize=6, ha='center')
 
@@ -440,7 +475,7 @@ def draw_live_preview(nodes, elements, supports_list, sec_name, loads, segments,
     draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads, segments, seg_starts)
     return safe_render_fig(fig)
 
-def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list, sec_name, loads, segments, seg_starts):
+def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, supports_list, sec_name, loads, segments, seg_starts):
     apply_plot_styles()
     figs_dict = {}
     
@@ -453,7 +488,7 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list, s
     fig_r, ax_r = plt.subplots(figsize=(6, 5))
     ax_r.set_aspect('equal', adjustable='datalim')
     ax_r.axis('off')
-    draw_base_geometry(ax_r, nodes, elements, supports_list)
+    draw_base_geometry(ax_r, nodes, elements, supports_list, sec_name, segments, seg_starts)
     
     for sup in supports_list:
         n = sup['node']
@@ -475,24 +510,27 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list, s
             
     figs_dict['React'] = safe_render_fig(fig_r)
     
-    # 💡 الدالة الشاملة لرسم المومنت والشير والـ Axial مع إظهار القيم بالكامل
     def create_force_plot(val_key, scale, c_pos, c_neg):
         fig_f, ax_f = plt.subplots(figsize=(6, 5))
         ax_f.set_aspect('equal', adjustable='datalim')
         ax_f.axis('off')
-        draw_base_geometry(ax_f, nodes, elements, supports_list)
+        draw_base_geometry(ax_f, nodes, elements, supports_list, sec_name, segments, seg_starts)
         
         global_texts = []
         def is_far(tx, ty):
             for (px, py) in global_texts:
-                if np.hypot(tx-px, ty-py) < 0.25:
-                    return False
+                if np.hypot(tx-px, ty-py) < 0.35: return False
             return True
+
+        global_max = 0.0
+        for el in elements:
+            if el['type'] == 'frame' and el['group'] == 'segment': 
+                global_max = max(global_max, np.max(np.abs(el['internal'][val_key])))
 
         for el in elements:
             if el['type'] != 'frame': continue
-            n1, n2 = nodes[el['n1']], nodes[el['n2']]
-            x1, y1 = n1[0], n1[1]
+            n1, n2 = el['n1'], el['n2']
+            x1, y1 = nodes[n1]
             c, s, L = el['c'], el['s'], el['L']
             
             xs = el['internal']['x']
@@ -502,30 +540,42 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list, s
             px = x1 + c * xs - s * plot_vals * scale
             py = y1 + s * xs + c * plot_vals * scale
             
+            # 💡 الإطار الخارجي فقط بدون تهشير داخلي
             for k in range(len(px)-1):
                 color = c_pos if vals[k] >= 0 else c_neg
                 ax_f.plot([px[k], px[k+1]], [py[k], py[k+1]], color=color, lw=0.8)
-                lx, ly = x1 + c*xs[k], y1 + s*xs[k]
-                ax_f.plot([lx, px[k]], [ly, py[k]], color=color, lw=0.3, alpha=0.5)
+                
+            ax_f.plot([x1, px[0]], [y1, py[0]], color=c_pos if vals[0]>=0 else c_neg, lw=0.8)
+            ax_f.plot([x1+c*L, px[-1]], [y1+s*L, py[-1]], color=c_pos if vals[-1]>=0 else c_neg, lw=0.8)
 
+            # 💡 خطوط التهشير المتباعدة الأنيقة
+            num_lines = max(2, int(L / 0.5))
+            for i in range(1, num_lines):
+                idx = int(i * len(px) / num_lines)
+                color = c_pos if vals[idx] >= 0 else c_neg
+                lx, ly = x1 + c*xs[idx], y1 + s*xs[idx]
+                ax_f.plot([lx, px[idx]], [ly, py[idx]], color=color, lw=0.3, alpha=0.5)
+
+            # 💡 التوقيع بقيم الموجب والسالب عند مناطق التغير فقط
             def plot_val(idx):
                 v = vals[idx]
-                pv = plot_vals[idx]
                 if abs(v) < 0.1: return
                 tx, ty = px[idx], py[idx]
-                sgn = 1 if pv >= 0 else -1
+                sgn = 1 if plot_vals[idx] >= 0 else -1
                 tx += -s * sgn * 0.15
                 ty += c * sgn * 0.15
+                v_color = c_pos if v >= 0 else c_neg
                 if is_far(tx, ty):
-                    ax_f.text(tx, ty, f"{v:.1f}", fontsize=6, color='black', ha='center', va='center')
+                    ax_f.text(tx, ty, f"{v:+.1f}", fontsize=6, color=v_color, ha='center', va='center', fontname='Arial')
                     global_texts.append((tx, ty))
 
             if len(vals) > 0:
-                plot_val(0)
-                plot_val(-1)
-                for i in range(1, len(vals)-1):
-                    if (vals[i] > vals[i-1] and vals[i] > vals[i+1]) or (vals[i] < vals[i-1] and vals[i] < vals[i+1]):
-                        plot_val(i)
+                if n1 in display_nodes: plot_val(0)
+                if n2 in display_nodes: plot_val(-1)
+                
+                max_idx = np.argmax(np.abs(vals))
+                if max_idx > 0 and max_idx < len(vals)-1:
+                    if abs(vals[max_idx]) > global_max * 0.1: plot_val(max_idx)
                 
         return safe_render_fig(fig_f)
 
@@ -533,10 +583,11 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, supports_list, s
     figs_dict['V'] = create_force_plot('V', scales['V'], 'blue', 'red')
     figs_dict['M'] = create_force_plot('M', scales['M'], 'blue', 'red')
     
+    # 3. Deflection
     fig_d, ax_d = plt.subplots(figsize=(6, 5))
     ax_d.set_aspect('equal', adjustable='datalim')
     ax_d.axis('off')
-    draw_base_geometry(ax_d, nodes, elements, supports_list)
+    draw_base_geometry(ax_d, nodes, elements, supports_list, sec_name, segments, seg_starts)
     
     max_def = 0.0
     for el in elements:
@@ -616,7 +667,7 @@ def render_advanced_shape_module():
         
         if sec_source == "Standard Profile Database":
             sec_list = list(SECTIONS_DB.keys()) if SECTIONS_DB else ["Soldier U100"]
-            # 💡 إعطاء أولوية لقطاع Soldier الافتراضي
+            # 💡 إعطاء أولوية לقطاع Soldier الافتراضي
             def_sec_idx = next((i for i, s in enumerate(sec_list) if 'SOLDIER' in s.upper()), 0)
             sec_name = st.selectbox("Profile Section", sec_list, index=def_sec_idx, on_change=reset_adv_state)
             raw = SECTIONS_DB.get(sec_name, {})
@@ -675,7 +726,7 @@ def render_advanced_shape_module():
         num_struts = st.number_input("Count of Struts", 0, 10, 1, on_change=reset_adv_state)
         struts_data = []
         
-        # 💡 فرز النهايز لضمان ترتيب الأولوية (PPH, PPS, TILT, MMP)
+        # 💡 ترتيب أولوية النهايز في القائمة المنسدلة
         raw_struts = list(STRUTS_DB.keys()) if STRUTS_DB else ["PPH 353"]
         def strut_priority(name):
             n = name.upper()
@@ -697,9 +748,11 @@ def render_advanced_shape_module():
 
         st.markdown("### 5. Supports & Base System")
         bs1, bs2 = st.columns(2)
-        base_sec_list = ["Soldier U100", "None (Direct to Ground)"]
-        base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=0, on_change=reset_adv_state)
-        # 💡 إضافة حقل مخصص لطول القطاع الأفقي بالأسفل
+        base_sec_list = list(SECTIONS_DB.keys()) + ["None (Direct to Ground)"]
+        base_def_idx = next((i for i, s in enumerate(base_sec_list) if 'SOLDIER' in s.upper()), 0)
+        base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=base_def_idx, on_change=reset_adv_state)
+        
+        # 💡 حقل إدخال طول القطاع الأفقي
         base_length = bs2.number_input("Total Base Length (m) [Optional]", value=0.0, step=0.5, on_change=reset_adv_state)
         
         c_sup1, c_sup2 = st.columns(2)
@@ -729,7 +782,7 @@ def render_advanced_shape_module():
             with st.spinner("Generating Matrix & Solving..."):
                 U, R = solve_fea_engine(nodes, elements, nodal_loads, supports_list)
                 st.session_state.adv_fea_data = {
-                    'U': U, 'R': R, 'nodes': nodes, 'elements': elements,
+                    'U': U, 'R': R, 'nodes': nodes, 'elements': elements, 'display_nodes': display_nodes,
                     'supports_list': supports_list, 'sec_props': sec_props,
                     'loads_data': loads_data, 'segments': segments, 'seg_starts': seg_starts
                 }
@@ -748,7 +801,7 @@ def render_advanced_shape_module():
             
         img_bufs = plot_sap2000_diagrams(
             fea_data['nodes'], fea_data['elements'], fea_data['R'], 
-            {'N': sc_n, 'V': sc_v, 'M': sc_m}, fea_data['supports_list'], 
+            {'N': sc_n, 'V': sc_v, 'M': sc_m}, fea_data['display_nodes'], fea_data['supports_list'], 
             fea_data['sec_props']['name'], loads=fea_data['loads_data'], 
             segments=fea_data['segments'], seg_starts=fea_data['seg_starts']
         )
@@ -778,7 +831,6 @@ def render_advanced_shape_module():
         c_p6.image(img_bufs['D'], use_container_width=True)
         c_p6.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['D']}</p>", unsafe_allow_html=True)
         
-        # --- Safety Checks Quick Table ---
         max_m, max_v = 0.0, 0.0
         for el in fea_data['elements']:
             if el['group'] == 'segment':
