@@ -79,7 +79,7 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
             color=arr_c, fontsize=7, fontname='Arial', ha='center', va='center')
 
 # =========================================================
-# 1. DXF Parsing Engine (Absolute DXF Fidelity Lock)
+# 1. DXF Parsing Engine (Absolute Mathematical Precision)
 # =========================================================
 def parse_dxf_to_data(file_bytes):
     if ezdxf is None: return None
@@ -107,7 +107,6 @@ def parse_dxf_to_data(file_bytes):
             lyr = e.dxf.layer
             etype = e.dxftype()
             
-            # 💡 قراءة الدعامات
             if match_layer(lyr, "supp"):
                 if etype in ['POINT', 'CIRCLE', 'INSERT']:
                     if etype == 'POINT':
@@ -117,7 +116,6 @@ def parse_dxf_to_data(file_bytes):
                     elif etype == 'INSERT':
                         raw_supports.append({'x': e.dxf.insert.x, 'y': e.dxf.insert.y})
             
-            # 💡 قراءة النهايز (Push Pulls)
             elif match_layer(lyr, "push") or match_layer(lyr, "pull"):
                 entities = [e]
                 if etype in ['LWPOLYLINE', 'POLYLINE']:
@@ -126,7 +124,6 @@ def parse_dxf_to_data(file_bytes):
                     if sub_e.dxftype() == 'LINE':
                         raw_struts.append({'p1': (sub_e.dxf.start.x, sub_e.dxf.start.y), 'p2': (sub_e.dxf.end.x, sub_e.dxf.end.y)})
                     
-            # 💡 قراءة السولجر والفريمات (Line + Arc)
             elif match_layer(lyr, "frame"):
                 entities = [e]
                 if etype in ['LWPOLYLINE', 'POLYLINE']:
@@ -143,7 +140,6 @@ def parse_dxf_to_data(file_bytes):
 
         if not raw_frames: return None
         
-        # الترتيب فقط للمسميات (S1, S2) من اليسار لليمين
         def get_min_x(f):
             if f['type'] == 'line': return min(f['p1'][0], f['p2'][0])
             return f['c'][0] - f['r']
@@ -175,7 +171,6 @@ def parse_dxf_to_data(file_bytes):
                     'abs_sa': sa, 'abs_ea': ea, 'sweep': sweep, 'kappa': 1.0/f['r']
                 })
 
-        # 💡 خوارزمية الربط الرياضي الفائقة لضمان عدم حركة أي عنصر من الكاد
         def get_closest_segment_exact(pt, segs):
             min_d = 9999.0
             best_idx = 0
@@ -203,7 +198,7 @@ def parse_dxf_to_data(file_bytes):
                     v = pt - c
                     ang = math.atan2(v[1], v[0])
                     sa = seg['abs_sa']
-                    sweep = seg.get('sweep', 0.0)
+                    sweep = seg['sweep']
                     
                     ang_norm = (ang - sa) % (2 * math.pi)
                     if ang_norm > sweep:
@@ -224,13 +219,10 @@ def parse_dxf_to_data(file_bytes):
         struts_mapped = []
         for s in raw_struts:
             p1, p2 = s['p1'], s['p2']
-            d1, seg1, s1 = get_closest_segment_exact(p1, chained_segs)
-            d2, seg2, s2 = get_closest_segment_exact(p2, chained_segs)
-            
-            # تحديد النقطة اللي لمست الفريم (Segment) والنقطة اللي لمست الأرض
-            if d1 < d2: top_p, bot_p, b_seg, b_s = p1, p2, seg1, s1
-            else: top_p, bot_p, b_seg, b_s = p2, p1, seg2, s2
+            if p1[1] > p2[1]: top_p, bot_p = p1, p2
+            else: top_p, bot_p = p2, p1
                 
+            d_top, b_seg, b_s = get_closest_segment_exact(top_p, chained_segs)
             struts_mapped.append({
                 'seg_idx': b_seg, 'dist': b_s, 
                 'gx': bot_p[0], 'gy': bot_p[1]
@@ -239,9 +231,9 @@ def parse_dxf_to_data(file_bytes):
         supps_mapped = []
         for sp in raw_supports:
             d_min, b_seg, b_s = get_closest_segment_exact((sp['x'], sp['y']), chained_segs)
-            if d_min < 0.1: # النقطة لامسة الفريم مباشرة
+            if d_min < 0.1:
                 supps_mapped.append({'x': sp['x'], 'y': sp['y'], 'type': 'Hinged', 'seg_idx': b_seg, 's_dist': b_s})
-            else: # النقطة مرسومة حرة
+            else:
                 supps_mapped.append({'x': sp['x'], 'y': sp['y'], 'type': 'Hinged'})
 
         return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped}
@@ -255,7 +247,7 @@ def parse_dxf_to_data(file_bytes):
             except: pass
 
 # =========================================================
-# 2. Geometry & Mesh Generators (Absolute Precision Engine)
+# 2. Geometry & Mesh Generators (Absolute Eval Engine)
 # =========================================================
 def eval_seg_point(seg, s_val, start_data=None):
     L = seg.get('L', 0.0)
@@ -265,13 +257,14 @@ def eval_seg_point(seg, s_val, start_data=None):
     is_dxf = seg.get('is_dxf', False)
     shape_type = seg.get('Shape Type', 'Straight Line')
     
-    # 💡 التنفيذ المطلق لإحداثيات الكاد (لا مجال لتحريك ملي واحد)
     if is_dxf:
         if shape_type == 'Straight Line' and 'abs_p1' in seg:
             p1, p2 = seg['abs_p1'], seg['abs_p2']
             px = p1[0] + ratio * (p2[0] - p1[0])
             py = p1[1] + ratio * (p2[1] - p1[1])
-            th = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            th = math.atan2(dy, dx)
             return px, py, th
             
         elif shape_type == 'Curve (Arc & Radius)' and 'abs_c' in seg:
@@ -279,10 +272,9 @@ def eval_seg_point(seg, s_val, start_data=None):
             current_ang = seg['abs_sa'] + ratio * seg.get('sweep', 0)
             px = c[0] + r * math.cos(current_ang)
             py = c[1] + r * math.sin(current_ang)
-            th = current_ang + math.pi/2 # Tangent
+            th = current_ang + math.pi/2
             return px, py, th
             
-    # Fallback to parametric logic if manually constructed in UI
     if start_data:
         x0, y0, th0, kappa = start_data.get('x0', 0), start_data.get('y0', 0), start_data.get('th0', 0), start_data.get('kappa', 0)
         if abs(kappa) < 1e-6: 
@@ -339,7 +331,6 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
         num_sub = max(1, int(np.ceil(L / 0.25)))
         for p in np.linspace(0, L, num_sub+1): keys.append(p)
             
-        # 💡 حماية الدقة (Precision Clamping) لضمان عدم تخطي الأطوال
         keys = sorted(list(set([min(max(round(k, 4), 0.0), L) for k in keys])))
         
         node_indices = []
@@ -354,10 +345,7 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
         
         for j in range(len(keys)-1):
             n1, n2 = node_indices[j], node_indices[j+1]
-            
-            # حماية لمنع القطاعات ذات الطول الصفري
-            if n1 == n2: 
-                continue 
+            if n1 == n2: continue 
                 
             s_mid = (keys[j] + keys[j+1]) / 2.0
             _, _, th_mid = eval_seg_point(seg, s_mid, seg_start_data[i])
@@ -400,7 +388,6 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
                 
         curr_x, curr_y, curr_th = eval_seg_point(seg, L, seg_start_data[i])
 
-    # 💡 Struts (Truss Elements - Moment Released Automatically)
     for st_idx, st_item in enumerate(struts):
         seg_idx = st_item.get('seg_idx', 0)
         dist = st_item.get('s_dist', 0.0)
@@ -433,7 +420,7 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
     return nodes, elements, nodal_loads, display_nodes, supports_list, seg_start_data
 
 # =========================================================
-# 3. Advanced FEA Solver (Maintains Truss P-P release)
+# 3. Advanced FEA Solver
 # =========================================================
 def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
     NDOF = len(nodes) * 3
@@ -561,14 +548,13 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
     return U, R_reactions
 
 # =========================================================
-# 4. Plotting Engine (Live Preview & SAP2000 Style Colors)
+# 4. Plotting Engine (Live Preview & SAP2000 Colors)
 # =========================================================
 def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, segments=None, seg_starts=None):
     for el in elements:
         if el['type'] not in ['frame', 'truss']: continue
         n1, n2 = nodes[el['n1']], nodes[el['n2']]
         if el['type'] == 'truss':
-            # 🔴 النهايز باللون الأحمر الخفيف
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='red', linestyle='-', linewidth=0.8, zorder=1)
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
@@ -581,7 +567,6 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
                     cx, cy, _ = eval_seg_point(seg, p, s_data)
                     curve_x.append(cx)
                     curve_y.append(cy)
-                # 🔵 السولجر باللون الأزرق الخفيف
                 ax.plot(curve_x, curve_y, color='royalblue', linestyle='-', linewidth=1.5, zorder=1)
             else:
                 ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='royalblue', linestyle='-', linewidth=1.5, zorder=1)
@@ -591,7 +576,6 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
         x, y = nodes[n][0], nodes[n][1]
         t = sup['type']
         
-        # 🟢 الدعامات باللون الأخضر الفاتح (LimeGreen)
         if t == 'Fixed':
             ax.plot(x, y, marker='s', markerfacecolor='none', markeredgecolor='limegreen', markersize=3, zorder=5)
             ax.plot([x - 0.1, x + 0.1], [y - 0.1, y + 0.1], color='limegreen', lw=1.0, zorder=4)
@@ -1071,33 +1055,51 @@ def render_advanced_shape_module():
                 else:
                     seg_sections.append(master_props)
 
-        st.markdown("### 3. Applied Loads")
-        num_loads = st.number_input("Count of Loads", 0, 20, num_loads_def, on_change=reset_adv_state)
+        # =========================================================
+        # 3. Applied Loads (Enhanced for Dead/Live & Multi-Segment Selection)
+        # =========================================================
+        st.markdown("### 3. Applied Loads (Dead & Live)")
+        num_loads = st.number_input("Count of Loads", 0, 30, num_loads_def, on_change=reset_adv_state)
         loads_data = []
-        seg_choices = [f"S{i+1}" for i in range(int(num_segs))]
+        
         for i in range(int(num_loads)):
-            with st.expander(f"📥 Load {i+1}", expanded=(i==0)):
-                lc1, lc2, lc3 = st.columns(3)
-                s_idx = lc1.selectbox("On Segment", seg_choices, key=f"ld_s_{i}", on_change=reset_adv_state)
-                s_idx_num = int(s_idx[1:]) - 1
-                l_type = lc2.selectbox("Type", ["Uniform", "Trapezoidal", "Point Load"], key=f"ld_t_{i}", on_change=reset_adv_state)
-                l_dir = lc3.selectbox("Direction", ["Gravity (Vertical ↓)", "Perpendicular (Local ↘)"], key=f"ld_d_{i}", on_change=reset_adv_state)
+            with st.expander(f"📥 Load Item {i+1}", expanded=(i==0)):
+                col_l1, col_l2, col_l3 = st.columns(3)
+                # اختيار نوع الحمل: Dead Load أو Live Load
+                load_category = col_l1.selectbox("Load Category", ["Dead Load", "Live Load"], key=f"ld_cat_{i}", on_change=reset_adv_state)
+                l_type = col_l2.selectbox("Type", ["Uniform", "Trapezoidal", "Point Load"], key=f"ld_t_{i}", on_change=reset_adv_state)
+                l_dir = col_l3.selectbox("Direction", ["Gravity (Vertical ↓)", "Perpendicular (Local ↘)"], key=f"ld_d_{i}", on_change=reset_adv_state)
+                
+                # إمكانية اختيار تطبيق الحمل على (Segment واحد، متعدد، أو Total القطاع كله)
+                target_mode = st.radio("Apply Load To:", ["Single Segment", "Multiple Segments", "Total System (All Segments)"], key=f"ld_mode_{i}", horizontal=True, on_change=reset_adv_state)
+                
+                target_segments = []
+                if target_mode == "Single Segment":
+                    s_choice = st.selectbox("Select Segment", seg_choices, key=f"ld_single_{i}", on_change=reset_adv_state)
+                    target_segments.append(int(s_choice[1:]) - 1)
+                elif target_mode == "Multiple Segments":
+                    selected_segs = st.multiselect("Select Segments", seg_choices, default=[seg_choices[0]], key=f"ld_multi_{i}", on_change=reset_adv_state)
+                    target_segments = [int(s[1:]) - 1 for s in selected_segs]
+                else:
+                    target_segments = list(range(int(num_segs)))
                 
                 sc1, sc2, sc3 = st.columns(3)
-                max_s = float(segments[s_idx_num].get('L', 0.0))
-                start = sc1.number_input("Start Arc Dist (m)", 0.0, max_s, value=0.0, format="%.5f", key=f"ld_st_{i}", on_change=reset_adv_state)
-                w1 = sc2.number_input("Value W1 (kN)", value=15.0, key=f"ld_w1_{i}", on_change=reset_adv_state)
+                w1 = sc1.number_input("Value W1 (kN/m or kN)", value=15.0, key=f"ld_w1_{i}", on_change=reset_adv_state)
+                w2_val = w1 if l_type != "Trapezoidal" else sc2.number_input("Value W2 (kN/m)", value=5.0, key=f"ld_w2_{i}", on_change=reset_adv_state)
                 
-                if l_type == "Uniform":
-                    end = sc3.number_input("End Arc Dist (m)", 0.0, max_s, value=max_s, format="%.5f", key=f"ld_en_{i}", on_change=reset_adv_state)
-                    w2 = w1
-                elif l_type == "Trapezoidal":
-                    end = sc3.number_input("End Arc Dist (m)", 0.0, max_s, value=max_s, format="%.5f", key=f"ld_en_{i}", on_change=reset_adv_state)
-                    w2 = st.number_input("Value W2 (kN)", value=5.0, key=f"ld_w2_{i}", on_change=reset_adv_state)
-                else:
-                    end = start; w2 = w1
-                    
-                loads_data.append({'seg_idx': s_idx_num, 'type': l_type, 'dir': l_dir, 'start': start, 'end': end, 'w1': w1, 'w2': w2})
+                # توزيع الأحمال على كل المستهدفين
+                for s_idx_num in target_segments:
+                    max_s = float(segments[s_idx_num].get('L', 0.0))
+                    loads_data.append({
+                        'seg_idx': s_idx_num, 
+                        'category': load_category, # Dead Load أو Live Load
+                        'type': l_type, 
+                        'dir': l_dir, 
+                        'start': 0.0, 
+                        'end': max_s, 
+                        'w1': w1, 
+                        'w2': w2_val
+                    })
 
         st.markdown("### 4. Struts (Push-Pulls)")
         def_strut_count = len(dxf_data['struts']) if dxf_data else 1
@@ -1121,38 +1123,30 @@ def render_advanced_shape_module():
                 def_s_idx = 0
                 def_dist = float(segments[0].get('L', 0.0))/2 if segments else 1.0
                 def_gx, def_gy = 3.0, 0.0
-                
-                is_dxf_strut = False
                 if dxf_data and i < len(dxf_data['struts']):
                     ds = dxf_data['struts'][i]
                     def_s_idx = ds.get('seg_idx', 0)
                     def_dist = ds.get('dist', 0.0)
                     def_gx = ds.get('gx', 0.0)
                     def_gy = ds.get('gy', 0.0)
-                    is_dxf_strut = True
                     
-                if is_dxf_strut:
-                    st.success(f"🔒 DXF Strut Mapped: S{def_s_idx+1} at Dist {def_dist:.3f}m | Grnd ({def_gx:.2f}, {def_gy:.2f})")
-                    st_sec = st.selectbox(f"P{i+1} Type", strut_opts, index=strut_opts.index(master_strut) if master_strut in strut_opts else 0, key=f"st_sec_{i}", on_change=reset_adv_state)
-                    struts_data.append({'seg_idx': def_s_idx, 's_dist': def_dist, 'gx': def_gx, 'gy': def_gy, 'sec': st_sec})
-                else:
-                    cc1, cc2, cc3, cc4 = st.columns(4)
-                    s_idx = cc1.selectbox("On Seg No.", seg_choices, index=def_s_idx, key=f"st_s_{i}", on_change=reset_adv_state)
-                    s_idx_num = int(s_idx[1:]) - 1
-                    max_s_strut = float(segments[s_idx_num].get('L', 0.0))
-                    safe_dist = min(max(float(def_dist), 0.0), max_s_strut)
-                    dist = cc2.number_input("Arc Dist (m)", 0.0, max_s_strut, value=safe_dist, format="%.5f", key=f"st_d_{i}", on_change=reset_adv_state)
-                    gx = cc3.number_input("Ground X (m)", value=float(def_gx), step=0.5, format="%.5f", key=f"st_gx_{i}", on_change=reset_adv_state)
-                    st_sec = cc4.selectbox(f"P{i+1} Type", strut_opts, index=strut_opts.index(master_strut) if master_strut in strut_opts else 0, key=f"st_sec_{i}", on_change=reset_adv_state)
-                    struts_data.append({'seg_idx': s_idx_num, 's_dist': dist, 'gx': gx, 'gy': def_gy, 'sec': st_sec})
+                cc1, cc2, cc3, cc4 = st.columns(4)
+                s_idx = cc1.selectbox("On Seg No.", seg_choices, index=def_s_idx, key=f"st_s_{i}", on_change=reset_adv_state)
+                s_idx_num = int(s_idx[1:]) - 1
+                max_s_strut = float(segments[s_idx_num].get('L', 0.0))
+                safe_dist = min(max(float(def_dist), 0.0), max_s_strut)
+                dist = cc2.number_input("Arc Dist (m)", 0.0, max_s_strut, value=safe_dist, format="%.5f", key=f"st_d_{i}", on_change=reset_adv_state)
+                gx = cc3.number_input("Ground X (m)", value=float(def_gx), step=0.5, format="%.5f", key=f"st_gx_{i}", on_change=reset_adv_state)
+                st_sec = cc4.selectbox(f"P{i+1} Type", strut_opts, index=strut_opts.index(master_strut) if master_strut in strut_opts else 0, key=f"st_sec_{i}", on_change=reset_adv_state)
+                struts_data.append({'seg_idx': s_idx_num, 's_dist': dist, 'gx': gx, 'gy': def_gy, 'sec': st_sec})
 
         st.markdown("### 5. Supports & Base System")
-        def_supp_count = len(dxf_data['supports']) if dxf_data else 2
+        def_supp_count = len(dxf_data['supports']) if dxf_data else 1
         num_base_sups = st.number_input("Count of Point Supports", 0, 50, def_supp_count, on_change=reset_adv_state)
         base_sups = []
         for i in range(int(num_base_sups)):
             sp1, sp2 = st.columns(2)
-            def_sx, def_sy = float(i*2.0), 0.0
+            def_sx, def_sy = float((i+1)*2.0), 0.0
             dxf_seg_idx, dxf_s_dist = None, None
             if dxf_data and i < len(dxf_data['supports']):
                 def_sx = dxf_data['supports'][i].get('x', 0.0)
@@ -1160,20 +1154,48 @@ def render_advanced_shape_module():
                 dxf_seg_idx = dxf_data['supports'][i].get('seg_idx')
                 dxf_s_dist = dxf_data['supports'][i].get('s_dist')
                 
+            sx = sp1.number_input(f"Sup G{i+1} X (m)", value=float(def_sx), format="%.5f", on_change=reset_adv_state, key=f"sx_{i}")
+            styp = sp2.selectbox(f"Sup G{i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}", on_change=reset_adv_state)
+            
+            sup_dict = {'x': sx, 'y': def_sy, 'type': styp}
             if dxf_seg_idx is not None:
-                st.write(f"🔒 DXF Support G{i+1} Mapped at X={def_sx:.3f}, Y={def_sy:.3f}")
-                styp = sp2.selectbox(f"Sup G{i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}", on_change=reset_adv_state)
-                base_sups.append({'x': def_sx, 'y': def_sy, 'type': styp, 'seg_idx': dxf_seg_idx, 's_dist': dxf_s_dist})
-            else:
-                sx = sp1.number_input(f"Sup G{i+1} X (m)", value=float(def_sx), format="%.5f", on_change=reset_adv_state, key=f"sx_{i}")
-                styp = sp2.selectbox(f"Sup G{i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}", on_change=reset_adv_state)
-                base_sups.append({'x': sx, 'y': def_sy, 'type': styp})
+                sup_dict['seg_idx'] = dxf_seg_idx
+                sup_dict['s_dist'] = dxf_s_dist
+            base_sups.append(sup_dict)
 
-    nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, seg_sections, loads_data, struts_data, None, base_sups, {'type': 'Hinged', 'angle': 0.0})
+    # تجهيز مصفوفة التحليل وتوليف الأحمال (Dead + Live)
+    # لحساب التحليل الإنشائي، نقوم بجمع أحمال Dead Load و Live Load لنحصل على الـ Combination الكلي
+    combined_loads = []
+    dead_loads_only = [l for l in loads_data if l.get('category') == 'Dead Load']
+    live_loads_only = [l for l in loads_data if l.get('category') == 'Live Load']
+    
+    # Combination Load = Dead + Live
+    # للتبسيط في مصفوفة الحل، نجمع الأحمال التي تقع على نفس الـ Segment
+    for s_idx in range(int(num_segs)):
+        s_dead = [l for l in dead_loads_only if l['seg_idx'] == s_idx]
+        s_live = [l for l in live_loads_only if l['seg_idx'] == s_idx]
+        
+        # إذا وجد حمل كلي، نجمعه
+        w1_total = sum([l['w1'] for l in s_dead]) + sum([l['w1'] for l in s_live])
+        w2_total = sum([l['w2'] for l in s_dead]) + sum([l['w2'] for l in s_live])
+        
+        if w1_total > 0 or w2_total > 0:
+            max_s = float(segments[s_idx].get('L', 0.0))
+            combined_loads.append({
+                'seg_idx': s_idx,
+                'type': 'Uniform',
+                'dir': 'Gravity (Vertical ↓)',
+                'start': 0.0,
+                'end': max_s,
+                'w1': w1_total,
+                'w2': w2_total
+            })
+
+    nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, seg_sections, combined_loads, struts_data, None, base_sups, {'type': 'Hinged', 'angle': 0.0})
 
     with c_plot:
         st.markdown("<h3 style='text-align: center; border-bottom: 2px solid #ddd; padding-bottom: 10px; font-family: Arial; color: #1e3d59;'>Live Geometry & Assignments</h3>", unsafe_allow_html=True)
-        live_img = draw_live_preview(nodes, elements, supports_list, seg_sections, loads_data, segments, seg_starts)
+        live_img = draw_live_preview(nodes, elements, supports_list, seg_sections, combined_loads, segments, seg_starts)
         st.image(live_img, use_container_width=True)
 
     st.markdown("---")
@@ -1181,15 +1203,16 @@ def render_advanced_shape_module():
     col_btn, col_blank = st.columns([1.5, 2.5])
     with col_btn:
         if st.button("🚀 Run Advanced Chain Analysis", type="primary", use_container_width=True):
-            with st.spinner("Generating Matrix & Solving..."):
+            with st.spinner("Generating Matrix & Solving (Combination: Dead + Live)..."):
                 U, R = solve_fea_engine(nodes, elements, nodal_loads, supports_list)
                 st.session_state.adv_fea_data = {
                     'U': U, 'R': R, 'nodes': nodes, 'elements': elements, 'display_nodes': display_nodes,
                     'supports_list': supports_list, 'seg_sections': seg_sections,
-                    'loads_data': loads_data, 'segments': segments, 'seg_starts': seg_starts
+                    'loads_data': combined_loads, 'dead_loads': dead_loads_only, 'live_loads': live_loads_only,
+                    'segments': segments, 'seg_starts': seg_starts
                 }
                 st.session_state.adv_solved = True
-            st.success("✅ Analysis Complete!")
+            st.success("✅ Analysis Complete based on (Dead + Live) Combination!")
             
     if st.session_state.adv_solved:
         st.markdown("### 🎛️ Analysis Results & Diagrams")
@@ -1208,8 +1231,14 @@ def render_advanced_shape_module():
             segments=fea_data['segments'], seg_starts=fea_data['seg_starts']
         )
         
+        # توليد دياجرامات الأحمال المنفصلة (Live Load Diagram & Dead Load Diagram) كما طلبت تماماً
+        dead_img_buf = draw_live_preview(fea_data['nodes'], fea_data['elements'], fea_data['supports_list'], fea_data['seg_sections'], fea_data['dead_loads'], fea_data['segments'], fea_data['seg_starts'])
+        live_img_buf = draw_live_preview(fea_data['nodes'], fea_data['elements'], fea_data['supports_list'], fea_data['seg_sections'], fea_data['live_loads'], fea_data['segments'], fea_data['seg_starts'])
+
         titles = {
-            'Load': "Assigned Load Diagram",
+            'Load': "Combined Load Diagram (Dead + Live)",
+            'DeadLoad': "Dead Load Diagram",
+            'LiveLoad': "Live Load Diagram",
             'React': "Reactions Diagram (kN)",
             'N': "Axial Force Diagram (kN)",
             'V': "Shear Force Diagram (kN)",
@@ -1217,23 +1246,26 @@ def render_advanced_shape_module():
             'D': "Deflection Deformed Shape"
         }
         
+        # عرض دياجرامات الأحمال منفصلة ومركبة
         c_p1, c_p2, c_p3 = st.columns(3)
-        c_p1.image(img_bufs['Load'], use_container_width=True)
-        c_p1.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['Load']}</p>", unsafe_allow_html=True)
-        c_p2.image(img_bufs['React'], use_container_width=True)
-        c_p2.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['React']}</p>", unsafe_allow_html=True)
-        c_p3.image(img_bufs['N'], use_container_width=True)
-        c_p3.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['N']}</p>", unsafe_allow_html=True)
+        c_p1.image(dead_img_buf, use_container_width=True)
+        c_p1.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['DeadLoad']}</p>", unsafe_allow_html=True)
+        
+        c_p2.image(live_img_buf, use_container_width=True)
+        c_p2.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['LiveLoad']}</p>", unsafe_allow_html=True)
+        
+        c_p3.image(img_bufs['React'], use_container_width=True)
+        c_p3.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['React']}</p>", unsafe_allow_html=True)
         
         c_p4, c_p5, c_p6 = st.columns(3)
-        c_p4.image(img_bufs['V'], use_container_width=True)
-        c_p4.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['V']}</p>", unsafe_allow_html=True)
+        c_p4.image(img_bufs['N'], use_container_width=True)
+        c_p4.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['N']}</p>", unsafe_allow_html=True)
         c_p5.image(img_bufs['M'], use_container_width=True)
         c_p5.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['M']}</p>", unsafe_allow_html=True)
         c_p6.image(img_bufs['D'], use_container_width=True)
         c_p6.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['D']}</p>", unsafe_allow_html=True)
         
-        st.markdown("### 📊 Safety Summary")
+        st.markdown("### 📊 Safety Summary (Combination: Dead + Live)")
         safety_data = []
         for i, sec in enumerate(fea_data['seg_sections']):
             max_m, max_v = 0.0, 0.0
