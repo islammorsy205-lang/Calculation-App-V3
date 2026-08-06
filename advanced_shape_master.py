@@ -9,9 +9,11 @@ import re
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 from matplotlib.patches import Polygon
+from PIL import Image, ImageChops
 from docx import Document
 from docx.shared import Cm, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.table import WD_TABLE_ALIGNMENT
 from docx.oxml import OxmlElement, parse_xml
 from docx.oxml.ns import nsdecls, qn
 
@@ -34,18 +36,31 @@ def apply_plot_styles():
 def get_short_name(sec_name):
     return re.sub(r'\s*\(.*?\)', '', sec_name).strip()
 
+# 💡 دالة لقص الحواف البيضاء/الشفافة لعمل أكبر زووم في الوورد
+def crop_image_bbox(img_bytes):
+    img = Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+    bg = Image.new("RGBA", img.size, (255, 255, 255, 0))
+    diff = ImageChops.difference(img, bg)
+    bbox = diff.getbbox()
+    if bbox:
+        img = img.crop(bbox)
+    out = io.BytesIO()
+    img.save(out, format='PNG')
+    return out.getvalue()
+
 def safe_render_fig(fig):
     try:
         plt.subplots_adjust(left=0.01, right=0.99, top=0.99, bottom=0.01)
         buf = io.BytesIO()
-        fig.savefig(buf, format='png', dpi=300, bbox_inches='tight', pad_inches=0.01, transparent=True)
-        return buf.getvalue()
+        fig.savefig(buf, format='png', dpi=400, bbox_inches='tight', pad_inches=0.0, transparent=True)
+        # تمرير الصورة لدالة القص
+        return crop_image_bbox(buf.getvalue())
     finally:
         plt.close(fig)
 
 def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
     if abs(force_mag) < 0.1: return
-    arr_L = 0.5  # 💡 تصغير طول السهم ليكون أنيق ومناسب
+    arr_L = 0.5  
     sgn = np.sign(force_mag)
     dx = sgn * axis_nx
     dy = sgn * axis_ny
@@ -54,7 +69,6 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
     arr_c = 'blue' if force_mag >= 0 else 'red'
     ax.arrow(start_x, start_y, arr_L*dx, arr_L*dy, length_includes_head=True, 
              head_width=0.08, head_length=0.12, fc=arr_c, ec=arr_c, lw=0.8, zorder=5)
-    # 💡 تلوين النص بنفس لون السهم ووضع علامة الموجب/السالب
     ax.text(start_x - 0.15*dx, start_y - 0.15*dy, f"{force_mag:+.1f}", 
             color=arr_c, fontsize=7, fontname='Arial', ha='center', va='center')
 
@@ -118,7 +132,6 @@ def build_chain_mesh(segments, sec_props, loads, struts, base_sec, supports, cor
             px, py, _ = get_parametric_point(curr_x, curr_y, curr_th, kappa, s_val)
             nid = get_or_add_node(px, py)
             node_indices.append(nid)
-            # 💡 حفظ نقط التغير المهمة لرسم القيم عندها لاحقاً
             if any(abs(s_val - kv) < 1e-4 for kv in key_s_vals):
                 key_nodes.add(nid)
             
@@ -321,7 +334,7 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
             ])
             f_end = k_loc @ u_loc - f_loc
             
-            xs = np.linspace(0, L, 11) 
+            xs = np.linspace(0, L, 51) 
             N_arr, V_arr, M_arr, v_rel_arr = np.zeros_like(xs), np.zeros_like(xs), np.zeros_like(xs), np.zeros_like(xs)
             v1, theta1, v2, theta2 = u_loc[1], u_loc[2], u_loc[4], u_loc[5]
             
@@ -350,7 +363,22 @@ def draw_base_geometry(ax, nodes, elements, supports_list, sec_name=None, segmen
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
-            ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
+            # رسم الكيرف الفعلي في الجيومتري
+            if el.get('group') == 'segment' and segments and seg_starts:
+                s_idx = el['seg_idx']
+                seg = segments[s_idx]
+                s_data = seg_starts[s_idx]
+                dist1 = np.hypot(n1[0]-s_data['x0'], n1[1]-s_data['y0']) 
+                dist2 = np.hypot(n2[0]-s_data['x0'], n2[1]-s_data['y0'])
+                # تقريب مسافة القوس
+                num_pts = 10
+                curve_pts = []
+                for p in np.linspace(0, el['L'], num_pts):
+                    # هنا نرسم العنصر كخط مستقيم لسهولة التعبير، لأننا قمنا بتجزئة الكيرف أصلاً في الدالة
+                    pass
+                ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
+            else:
+                ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
             
     for sup in supports_list:
         n = sup['node']
@@ -362,7 +390,6 @@ def draw_base_geometry(ax, nodes, elements, supports_list, sec_name=None, segmen
         nx, ny = np.sin(rad), -np.cos(rad) 
         tx, ty = -ny, nx 
         
-        # 💡 تصغير الدعامات بنسبة 50% كما طلبت
         if t == 'Fixed':
             ax.plot(x, y, marker='s', markerfacecolor='none', markeredgecolor='limegreen', markersize=3, zorder=5)
             ax.plot([x - 0.1*tx, x + 0.1*tx], [y - 0.1*ty, y + 0.1*ty], color='limegreen', lw=1.5, zorder=4)
@@ -387,10 +414,8 @@ def draw_base_geometry(ax, nodes, elements, supports_list, sec_name=None, segmen
             lx2, ly2 = x + base_dist*nx + line_w*tx, y + base_dist*ny + line_w*ty
             ax.plot([lx1, lx2], [ly1, ly2], color='limegreen', lw=1.2, zorder=4)
 
-    # 💡 توقيع الأسماء بشكل موازي وقريب جداً (في جميع الدياجرامات)
     if sec_name and segments and seg_starts:
         short_name = get_short_name(sec_name)
-        # أسماء النهايز
         for el in elements:
             if el['type'] == 'truss':
                 n1, n2 = nodes[el['n1']], nodes[el['n2']]
@@ -404,7 +429,6 @@ def draw_base_geometry(ax, nodes, elements, supports_list, sec_name=None, segmen
                     nx_s, ny_s = -dy/L_hyp, dx/L_hyp
                     ax.text(mid_x + nx_s*0.08, mid_y + ny_s*0.08, get_short_name(el.get('sec', '')), 
                             color='dimgray', fontsize=6, rotation=rot, ha='center', va='center', fontname='Arial')
-        # أسماء القطع العلوية
         for i, seg in enumerate(segments):
             s_data = seg_starts[i]
             mx, my, mth = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], seg['L']/2)
@@ -421,59 +445,54 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads,
     for ld in loads:
         i = ld['seg_idx']
         s_data = seg_starts[i]
-        
-        px1, py1, th1 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['start'])
-        px2, py2, th2 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['end'])
-        
         w1, w2 = ld['w1'], ld['w2']
         
-        if ld['type'] == 'Point Load':
-            h = 1.0
+        # 💡 خوارزمية رسم صندوق الحمل الموازي للكيرف
+        num_pts = max(10, int((ld['end'] - ld['start']) / 0.1))
+        s_vals = np.linspace(ld['start'], ld['end'], num_pts)
+        poly_pts = []
+        top_pts = []
+        
+        for sv in s_vals:
+            px, py, th = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], sv)
+            w_curr = w1 + (w2 - w1) * (sv - ld['start']) / max(1e-5, (ld['end'] - ld['start']))
+            hl = w_curr * scale_ld
+            poly_pts.append((px, py))
             if ld['dir'] == 'Gravity (Vertical ↓)':
-                ax.arrow(px1, py1+h, 0, -h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue', zorder=4)
-                ax.text(px1, py1+h+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center')
+                top_pts.append((px, py + hl))
             else:
-                c, s = np.cos(th1), np.sin(th1)
-                start_x, start_y = px1 - s*h, py1 + c*h
-                ax.arrow(start_x, start_y, s*h, -c*h, head_width=0.1, head_length=0.2, length_includes_head=True, fc='blue', ec='blue', zorder=4)
-                ax.text(start_x, start_y+0.2, f"{w1} kN", color='blue', fontsize=7, ha='center', rotation=np.degrees(th1))
-        else:
-            if ld['dir'] == 'Gravity (Vertical ↓)':
-                hx1, hy1 = px1, py1 + w1 * scale_ld
-                hx2, hy2 = px2, py2 + w2 * scale_ld
-            else:
-                c1, s1 = np.cos(th1), np.sin(th1)
-                c2, s2 = np.cos(th2), np.sin(th2)
-                hx1, hy1 = px1 - s1 * w1 * scale_ld, py1 + c1 * w1 * scale_ld
-                hx2, hy2 = px2 - s2 * w2 * scale_ld, py2 + c2 * w2 * scale_ld
+                c, s = np.cos(th), np.sin(th)
+                top_pts.append((px - s*hl, py + c*hl))
                 
-            # 💡 إلغاء التهشير الصلب وعمل إطار خارجي مغلق نظيف
-            ax.add_patch(Polygon([(px1,py1), (hx1,hy1), (hx2,hy2), (px2,py2)], facecolor='none', edgecolor='blue', lw=0.8, zorder=2))
+        poly_pts.extend(top_pts[::-1])
+        ax.add_patch(Polygon(poly_pts, facecolor='none', edgecolor='blue', lw=0.8, zorder=2))
+
+        # 💡 أسهم توضيحية قصيرة بمسافات متباعدة
+        num_arrows = max(3, int((ld['end'] - ld['start']) / 0.8))
+        for k in range(num_arrows):
+            frac = k / (num_arrows - 1) if num_arrows > 1 else 0.5
+            sv = ld['start'] + frac * (ld['end'] - ld['start'])
+            px_c, py_c, th_c = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], sv)
+            w_curr = w1 + frac * (w2 - w1)
+            hl = w_curr * scale_ld
+            arr_len = hl * 0.6 # سهم قصير 60% من الارتفاع
             
-            # 💡 رسم أسهم خفيفة كل مسافة كبيرة
-            num_arrows = max(2, int(np.hypot(px2-px1, py2-py1) / 0.8))
-            for k in range(1, num_arrows):
-                frac = k / num_arrows
-                s_curr = ld['start'] + frac * (ld['end'] - ld['start'])
-                w_curr = w1 + frac * (w2 - w1)
-                px_c, py_c, th_c = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], s_curr)
-                hl = w_curr * scale_ld
-                if ld['dir'] == 'Gravity (Vertical ↓)':
-                    ax.arrow(px_c, py_c + hl, 0, -hl, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.3, zorder=3)
-                else:
-                    c_c, s_c = np.cos(th_c), np.sin(th_c)
-                    ax.arrow(px_c - s_c*hl, py_c + c_c*hl, s_c*hl, -c_c*hl, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.3, zorder=3)
+            if ld['dir'] == 'Gravity (Vertical ↓)':
+                ax.arrow(px_c, py_c + arr_len, 0, -arr_len, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
+            else:
+                c_c, s_c = np.cos(th_c), np.sin(th_c)
+                ax.arrow(px_c - s_c*arr_len, py_c + c_c*arr_len, s_c*arr_len, -c_c*arr_len, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
 
-            ax.text(hx1, hy1+0.2, f"{w1}", color='blue', fontsize=6, ha='center')
-            ax.text(hx2, hy2+0.2, f"{w2}", color='blue', fontsize=6, ha='center')
+        # 💡 طباعة القيم بالألوان والأسود بدون kN
+        px1, py1, th1 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['start'])
+        hx1 = px1 if ld['dir'] == 'Gravity (Vertical ↓)' else px1 - np.sin(th1)*w1*scale_ld
+        hy1 = py1 + w1*scale_ld if ld['dir'] == 'Gravity (Vertical ↓)' else py1 + np.cos(th1)*w1*scale_ld
+        ax.text(hx1, hy1+0.2, f"{w1:.1f}", color='black', fontsize=6, ha='center', fontname='Arial')
 
-def draw_live_preview(nodes, elements, supports_list, sec_name, loads, segments, seg_starts):
-    apply_plot_styles()
-    fig, ax = plt.subplots(figsize=(8, 5))
-    ax.set_aspect('equal', adjustable='datalim')
-    ax.axis('off')
-    draw_loads_and_geometry(ax, nodes, elements, supports_list, sec_name, loads, segments, seg_starts)
-    return safe_render_fig(fig)
+        px2, py2, th2 = get_parametric_point(s_data['x0'], s_data['y0'], s_data['th0'], s_data['kappa'], ld['end'])
+        hx2 = px2 if ld['dir'] == 'Gravity (Vertical ↓)' else px2 - np.sin(th2)*w2*scale_ld
+        hy2 = py2 + w2*scale_ld if ld['dir'] == 'Gravity (Vertical ↓)' else py2 + np.cos(th2)*w2*scale_ld
+        ax.text(hx2, hy2+0.2, f"{w2:.1f}", color='black', fontsize=6, ha='center', fontname='Arial')
 
 def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, supports_list, sec_name, loads, segments, seg_starts):
     apply_plot_styles()
@@ -540,7 +559,6 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
             px = x1 + c * xs - s * plot_vals * scale
             py = y1 + s * xs + c * plot_vals * scale
             
-            # 💡 الإطار الخارجي فقط بدون تهشير داخلي
             for k in range(len(px)-1):
                 color = c_pos if vals[k] >= 0 else c_neg
                 ax_f.plot([px[k], px[k+1]], [py[k], py[k+1]], color=color, lw=0.8)
@@ -548,7 +566,6 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
             ax_f.plot([x1, px[0]], [y1, py[0]], color=c_pos if vals[0]>=0 else c_neg, lw=0.8)
             ax_f.plot([x1+c*L, px[-1]], [y1+s*L, py[-1]], color=c_pos if vals[-1]>=0 else c_neg, lw=0.8)
 
-            # 💡 خطوط التهشير المتباعدة الأنيقة
             num_lines = max(2, int(L / 0.5))
             for i in range(1, num_lines):
                 idx = int(i * len(px) / num_lines)
@@ -556,7 +573,6 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
                 lx, ly = x1 + c*xs[idx], y1 + s*xs[idx]
                 ax_f.plot([lx, px[idx]], [ly, py[idx]], color=color, lw=0.3, alpha=0.5)
 
-            # 💡 التوقيع بقيم الموجب والسالب عند مناطق التغير فقط
             def plot_val(idx):
                 v = vals[idx]
                 if abs(v) < 0.1: return
@@ -607,12 +623,119 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
 
     return figs_dict
 
+# =========================================================
+# 4. Word Report Generator
+# =========================================================
+def generate_chain_report(sys_data):
+    if os.path.exists("Acrow_Template.docx"):
+        doc = Document("Acrow_Template.docx")
+        doc.add_page_break()
+    else:
+        doc = Document()
+        
+    def force_ltr_left(p):
+        p.alignment = WD_ALIGN_PARAGRAPH.LEFT
+        pPr = p._element.get_or_add_pPr()
+        bidi = OxmlElement('w:bidi')
+        bidi.set(qn('w:val'), '0')
+        pPr.append(bidi)
+        
+    def add_line(text, bold=False):
+        p = doc.add_paragraph()
+        force_ltr_left(p)
+        p.paragraph_format.line_spacing = 1.5
+        r = p.add_run(text)
+        r.font.name = 'Arial'
+        r.font.size = Pt(12)
+        r.font.bold = bold
+        r.font.rtl = False
+        
+    def add_check(component, param, act, allw, unit):
+        p = doc.add_paragraph()
+        force_ltr_left(p)
+        p.paragraph_format.line_spacing = 1.5
+        r_title = p.add_run(f"• Check {component} ({param}):\n")
+        r_title.bold = True
+        r_title.font.rtl = False
+        if allw > 9000:
+            r_act = p.add_run(f"  Actual = {act:.2f} {unit}  (No Limit Required)")
+            r_res = p.add_run("  SAFE")
+            r_res.font.color.rgb = RGBColor(0, 128, 0)
+        else:
+            r_act = p.add_run(f"  Actual = {act:.2f} {unit}  <  Allowable = {allw:.2f} {unit}  ")
+            res = "SAFE" if act <= allw else "UNSAFE"
+            r_res = p.add_run(res)
+            r_res.font.color.rgb = RGBColor(0, 128, 0) if res == "SAFE" else RGBColor(255, 0, 0)
+        r_act.font.rtl = False
+        r_res.font.bold = True
+        r_res.font.rtl = False
+    
+    p_title = doc.add_paragraph()
+    force_ltr_left(p_title)
+    run_title = p_title.add_run("CALCULATION SHEET FOR ADVANCED SHAPES")
+    run_title.font.name = 'Arial'
+    run_title.font.size = Pt(16)
+    run_title.font.bold = True
+    run_title.font.rtl = False
+    
+    add_line("="*50, bold=True)
+    
+    add_line(f"1. Geometry & Inputs:", bold=True)
+    add_line(f"- Total System Length = {sum([s['L'] for s in sys_data['segments']]):.2f} m")
+    add_line(f"- Number of Segments = {len(sys_data['segments'])}")
+    add_line(f"- Applied Loads = Variable (Refer to Diagram)")
+    
+    doc.add_paragraph()
+    add_line(f"2. Safety Checks:", bold=True)
+    
+    sec_props = sys_data['sec_props']
+    add_line(f"A. Main Element ({sec_props['name']})", bold=True)
+    add_check("Moment", "M_max", sys_data['max_M'], sec_props['Mall'], "kN.m")
+    add_check("Shear", "V_max", sys_data['max_V'], sec_props['Qall'], "kN")
+    
+    doc.add_page_break()
+    add_line("3. Analysis Diagrams:", bold=True)
+    doc.add_paragraph()
+    
+    def add_diagram_pair(doc, img1_bytes, title1, img2_bytes, title2):
+        table = doc.add_table(rows=2, cols=2)
+        table.alignment = WD_TABLE_ALIGNMENT.CENTER
+        
+        p1 = table.rows[0].cells[0].paragraphs[0]
+        p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p1.add_run().add_picture(io.BytesIO(img1_bytes), width=Cm(8.0))
+        
+        p2 = table.rows[0].cells[1].paragraphs[0]
+        p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        p2.add_run().add_picture(io.BytesIO(img2_bytes), width=Cm(8.0))
+        
+        p3 = table.rows[1].cells[0].paragraphs[0]
+        p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r3 = p3.add_run(title1)
+        r3.font.name, r3.font.size, r3.bold = 'Arial', Pt(10), True
+        
+        p4 = table.rows[1].cells[1].paragraphs[0]
+        p4.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        r4 = p4.add_run(title2)
+        r4.font.name, r4.font.size, r4.bold = 'Arial', Pt(10), True
+
+    bufs = sys_data['img_bufs']
+    add_diagram_pair(doc, bufs['Load'], "Assigned Load Diagram", bufs['React'], "Reactions Diagram (kN)")
+    doc.add_paragraph()
+    add_diagram_pair(doc, bufs['N'], "Axial Force Diagram (kN)", bufs['V'], "Shear Force Diagram (kN)")
+    doc.add_paragraph()
+    add_diagram_pair(doc, bufs['M'], "Bending Moment Diagram (kN.m)", bufs['D'], "Deflection Shape")
+    
+    out = io.BytesIO()
+    doc.save(out)
+    return out
+
 def reset_adv_state():
     if 'adv_solved' in st.session_state:
         st.session_state.adv_solved = False
 
 # =========================================================
-# 4. Main Streamlit UI (The Hybrid Builder)
+# 5. Main Streamlit UI (The Hybrid Builder)
 # =========================================================
 def render_advanced_shape_module():
     st.markdown("## 🎢 The Chain Builder (Multi-Segment & Curved Shapes)")
@@ -667,7 +790,6 @@ def render_advanced_shape_module():
         
         if sec_source == "Standard Profile Database":
             sec_list = list(SECTIONS_DB.keys()) if SECTIONS_DB else ["Soldier U100"]
-            # 💡 إعطاء أولوية לقطاع Soldier الافتراضي
             def_sec_idx = next((i for i, s in enumerate(sec_list) if 'SOLDIER' in s.upper()), 0)
             sec_name = st.selectbox("Profile Section", sec_list, index=def_sec_idx, on_change=reset_adv_state)
             raw = SECTIONS_DB.get(sec_name, {})
@@ -726,7 +848,6 @@ def render_advanced_shape_module():
         num_struts = st.number_input("Count of Struts", 0, 10, 1, on_change=reset_adv_state)
         struts_data = []
         
-        # 💡 ترتيب أولوية النهايز في القائمة المنسدلة
         raw_struts = list(STRUTS_DB.keys()) if STRUTS_DB else ["PPH 353"]
         def strut_priority(name):
             n = name.upper()
@@ -752,7 +873,6 @@ def render_advanced_shape_module():
         base_def_idx = next((i for i, s in enumerate(base_sec_list) if 'SOLDIER' in s.upper()), 0)
         base_sec = bs1.selectbox("Base Soldier Profile", base_sec_list, index=base_def_idx, on_change=reset_adv_state)
         
-        # 💡 حقل إدخال طول القطاع الأفقي
         base_length = bs2.number_input("Total Base Length (m) [Optional]", value=0.0, step=0.5, on_change=reset_adv_state)
         
         c_sup1, c_sup2 = st.columns(2)
@@ -843,6 +963,14 @@ def render_advanced_shape_module():
             {"Component": fea_data['sec_props']['name'], "Force Type": "Shear Force", "Actual": f"{max_v:.2f} kN", "Allowable": f"{fea_data['sec_props']['Qall']:.2f} kN", "Status": "SAFE" if max_v <= fea_data['sec_props']['Qall'] else "UNSAFE"}
         ])
         st.table(df)
+
+        fea_data['max_M'] = max_m
+        fea_data['max_V'] = max_v
+        fea_data['img_bufs'] = img_bufs
+        
+        st.markdown("---")
+        doc_out = generate_chain_report(fea_data)
+        st.download_button("⬇️ Download Calculation Sheet (Word)", data=doc_out.getvalue(), file_name="Advanced_Shape_Calculation_Sheet.docx", mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document")
 
 if __name__ == "__main__":
     render_advanced_shape_module()
