@@ -14,8 +14,8 @@ from docx import Document
 from docx.shared import Cm, Pt, RGBColor
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.enum.table import WD_TABLE_ALIGNMENT
-from docx.oxml import OxmlElement
-from docx.oxml.ns import qn
+from docx.oxml import OxmlElement, parse_xml
+from docx.oxml.ns import nsdecls, qn
 
 try:
     from config import SECTIONS_DB, STRUTS_DB
@@ -361,18 +361,7 @@ def draw_base_geometry(ax, nodes, elements, supports_list, sec_name=None, segmen
             ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='gray', linestyle='--', linewidth=1.0, zorder=1)
         else:
             if el.get('group') == 'base' and el.get('sec') == "None (Direct to Ground)": continue
-            if el.get('group') == 'segment' and segments and seg_starts:
-                s_idx = el['seg_idx']
-                seg = segments[s_idx]
-                s_data = seg_starts[s_idx]
-                curve_x, curve_y = [], []
-                for p in np.linspace(0, el['L'], 5):
-                    cx, cy, _ = get_parametric_point(nodes[n1][0], nodes[n1][1], s_data['th0'], s_data['kappa'], p)
-                    curve_x.append(cx)
-                    curve_y.append(cy)
-                ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
-            else:
-                ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
+            ax.plot([n1[0], n2[0]], [n1[1], n2[1]], color='black', linestyle='-', linewidth=1.5, zorder=1)
             
     for sup in supports_list:
         n = sup['node']
