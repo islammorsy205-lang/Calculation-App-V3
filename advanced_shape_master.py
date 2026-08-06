@@ -79,7 +79,7 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
             color=arr_c, fontsize=7, fontname='Arial', ha='center', va='center')
 
 # =========================================================
-# 1. DXF Parsing Engine (Absolute Coordinates Mapped)
+# 1. DXF Parsing Engine (Absolute Precision & Bulletproof)
 # =========================================================
 def parse_dxf_to_data(file_bytes):
     if ezdxf is None: return None
@@ -154,25 +154,35 @@ def parse_dxf_to_data(file_bytes):
                 L = math.hypot(dx, dy)
                 ang = math.degrees(math.atan2(dy, dx))
                 chained_segs.append({
-                    'Shape Type': 'Straight Line', 'L': L, 'start_angle': ang, 
-                    'is_dxf': True, 'abs_p1': p_start, 'abs_p2': p_end
+                    'type': 'Straight Line',
+                    'Shape Type': 'Straight Line', 
+                    'L': L, 'start_angle': ang, 
+                    'smooth': False, 'is_dxf': True, 
+                    'abs_p1': p_start, 'abs_p2': p_end, 'kappa': 0.0
                 })
             elif f['type'] == 'arc':
                 sa, ea = f['sa'], f['ea']
                 if ea < sa: ea += 2 * math.pi
                 sweep = ea - sa
                 L = f['r'] * sweep
+                # Protect missing UI keys
                 chained_segs.append({
-                    'Shape Type': 'Curve (Arc & Radius)', 'L': L,
-                    'is_dxf': True, 'abs_c': f['c'], 'abs_r': f['r'],
-                    'abs_sa': sa, 'abs_ea': ea, 'sweep': sweep
+                    'type': 'Curve (Arc & Radius)',
+                    'Shape Type': 'Curve (Arc & Radius)', 
+                    'L': L, 'Radius (R) (m)': f['r'],
+                    'Curvature Direction': "Arching Up ⤴ (Concave)",
+                    'start_angle': math.degrees(sa + math.pi/2),
+                    'smooth': False, 'is_dxf': True, 
+                    'abs_c': f['c'], 'abs_r': f['r'],
+                    'abs_sa': sa, 'abs_ea': ea, 'sweep': sweep, 'kappa': 1.0/f['r']
                 })
 
         # Smart Mapping Engine for Struts & Supports
         def eval_dxf_point(seg, s_val):
             L = seg['L']
             ratio = s_val / L if L > 1e-6 else 0
-            if seg['Shape Type'] == 'Straight Line':
+            shape_type = seg.get('type', seg.get('Shape Type', 'Straight Line'))
+            if shape_type == 'Straight Line':
                 px = seg['abs_p1'][0] + ratio * (seg['abs_p2'][0] - seg['abs_p1'][0])
                 py = seg['abs_p1'][1] + ratio * (seg['abs_p2'][1] - seg['abs_p1'][1])
             else:
@@ -216,7 +226,16 @@ def parse_dxf_to_data(file_bytes):
             else: # On ground
                 supps_mapped.append({'x': sp['x'], 'y': sp['y'], 'type': 'Hinged'})
 
-        return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped}
+        # Extract base length securely
+        min_y = min(min(f['p1'][1], f['p2'][1]) for f in raw_frames if f['type'] == 'line') if any(f['type'] == 'line' for f in raw_frames) else 0.0
+        base_len = 0.0
+        for f in raw_frames:
+            if f['type'] == 'line':
+                if abs(f['p1'][1] - min_y) < 0.1 and abs(f['p2'][1] - min_y) < 0.1:
+                    bl = abs(f['p1'][0] - f['p2'][0])
+                    if bl > base_len: base_len = bl
+
+        return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped, 'base_length': base_len}
         
     except Exception as e:
         st.error(f"⚠️ حدث خطأ أثناء تحليل ملف الـ DXF. تأكد من أن الملف سليم: {e}")
@@ -230,11 +249,13 @@ def parse_dxf_to_data(file_bytes):
 # 2. Geometry & Mesh Generators (Absolute Eval Engine)
 # =========================================================
 def eval_seg_point(seg, s_val, start_data=None):
-    L = seg['L']
+    L = seg.get('L', 0.0)
     ratio = s_val / L if L > 1e-6 else 0
     
+    shape_type = seg.get('type', seg.get('Shape Type', 'Straight Line'))
+    
     if seg.get('is_dxf'):
-        if seg['Shape Type'] == 'Straight Line':
+        if shape_type == 'Straight Line':
             px = seg['abs_p1'][0] + ratio * (seg['abs_p2'][0] - seg['abs_p1'][0])
             py = seg['abs_p1'][1] + ratio * (seg['abs_p2'][1] - seg['abs_p1'][1])
             dx = seg['abs_p2'][0] - seg['abs_p1'][0]
@@ -247,17 +268,20 @@ def eval_seg_point(seg, s_val, start_data=None):
             th = current_ang + math.pi/2 # Tangent
         return px, py, th
     
-    # Fallback to chaining logic if manually entered
-    x0, y0, th0, kappa = start_data['x0'], start_data['y0'], start_data['th0'], start_data['kappa']
-    if abs(kappa) < 1e-6: 
-        x = x0 + s_val * math.cos(th0)
-        y = y0 + s_val * math.sin(th0)
-        th = th0
-    else: 
-        x = x0 + (math.sin(th0 + kappa * s_val) - math.sin(th0)) / kappa
-        y = y0 - (math.cos(th0 + kappa * s_val) - math.cos(th0)) / kappa
-        th = th0 + kappa * s_val
-    return x, y, th
+    # Fallback to parametric chain logic if manually entered
+    if start_data:
+        x0, y0, th0, kappa = start_data['x0'], start_data['y0'], start_data['th0'], start_data['kappa']
+        if abs(kappa) < 1e-6: 
+            x = x0 + s_val * math.cos(th0)
+            y = y0 + s_val * math.sin(th0)
+            th = th0
+        else: 
+            x = x0 + (math.sin(th0 + kappa * s_val) - math.sin(th0)) / kappa
+            y = y0 - (math.cos(th0 + kappa * s_val) - math.cos(th0)) / kappa
+            th = th0 + kappa * s_val
+        return x, y, th
+    
+    return 0, 0, 0
 
 def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, corner_sup, base_length=0.0):
     nodes = []
@@ -281,17 +305,17 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
     for i, seg in enumerate(segments):
         if not seg.get('is_dxf'):
             if i == 0 or not seg.get('smooth', True):
-                curr_th = np.radians(seg['start_angle'])
+                curr_th = np.radians(seg.get('start_angle', 0.0))
             
-        L = seg['L']
+        L = seg.get('L', 0.0)
         kappa = seg.get('kappa', 0.0)
         seg_start_data.append({'x0': curr_x, 'y0': curr_y, 'th0': curr_th, 'kappa': kappa})
         
         key_s_vals = [0.0, L]
         for st_item in struts:
-            if st_item['seg_idx'] == i: key_s_vals.append(st_item['s_dist'])
+            if st_item.get('seg_idx') == i: key_s_vals.append(st_item['s_dist'])
         for ld in loads:
-            if ld['seg_idx'] == i:
+            if ld.get('seg_idx') == i:
                 key_s_vals.append(ld['start'])
                 key_s_vals.append(ld['end'])
         for sp in supports:
@@ -321,7 +345,7 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
             p_x1, p_y1, p_x2, p_y2 = 0.0, 0.0, 0.0, 0.0
             
             for ld in loads:
-                if ld['seg_idx'] == i and ld['type'] != 'Point Load':
+                if ld.get('seg_idx') == i and ld.get('type') != 'Point Load':
                     if ld['start'] - 1e-4 <= s_mid <= ld['end'] + 1e-4:
                         L_ld = max(ld['end'] - ld['start'], 1e-5)
                         wa = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j] - ld['start']) / L_ld
@@ -342,7 +366,7 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
             })
             
         for ld in loads:
-            if ld['seg_idx'] == i and ld['type'] == 'Point Load':
+            if ld.get('seg_idx') == i and ld.get('type') == 'Point Load':
                 try:
                     idx = keys.index(round(ld['start'], 4))
                     nid = node_indices[idx]
@@ -367,7 +391,7 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
     for x in base_x_pts:
         base_node_map[x] = get_or_add_node(x, 0.0)
         
-    if base_sec != "None (Direct to Ground)":
+    if base_sec and base_sec != "None (Direct to Ground)":
         b_props = SECTIONS_DB.get(base_sec, {'E': 2100.0, 'A': 0.00343, 'I': 412.0})
         for j in range(len(base_x_pts)-1):
             n1 = base_node_map[base_x_pts[j]]
@@ -380,9 +404,9 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
             })
 
     for st_idx, st_item in enumerate(struts):
-        seg_idx = st_item['seg_idx']
-        dist = st_item['s_dist']
-        gx = st_item['gx']
+        seg_idx = st_item.get('seg_idx', 0)
+        dist = st_item.get('s_dist', 0.0)
+        gx = st_item.get('gx', 0.0)
         gy = st_item.get('gy', 0.0)
         
         nx, ny, _ = eval_seg_point(segments[seg_idx], dist, seg_start_data[seg_idx])
@@ -391,15 +415,15 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
         bot_node = get_or_add_node(gx, gy)
         
         elements.append({
-            'type': 'truss', 'group': 'strut', 'sec': st_item['sec'],
+            'type': 'truss', 'group': 'strut', 'sec': st_item.get('sec', 'Unknown'),
             'n1': bot_node, 'n2': top_node, 'strut_idx': st_idx,
             'E': 21000000.0, 'A': 0.001
         })
 
     supports_list = []
     for sup in supports:
-        nid = get_or_add_node(sup['x'], sup.get('y', 0.0))
-        supports_list.append({'node': nid, 'type': sup['type'], 'angle': 0.0})
+        nid = get_or_add_node(sup.get('x', 0.0), sup.get('y', 0.0))
+        supports_list.append({'node': nid, 'type': sup.get('type', 'Hinged'), 'angle': 0.0})
         
     display_nodes = set([s['node'] for s in supports_list])
     display_nodes.update(key_nodes) 
@@ -462,7 +486,7 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
     K_pen = 1e12
     
     for sup in supports_list:
-        n, t, a = sup['node'], sup['type'], sup['angle']
+        n, t, a = sup['node'], sup['type'], sup.get('angle', 0.0)
         if t == 'Fixed': fixed_dofs.extend([3*n, 3*n+1, 3*n+2])
         elif t == 'Hinged': fixed_dofs.extend([3*n, 3*n+1])
         elif t == 'Roller':
@@ -545,7 +569,7 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
                 seg = segments[s_idx]
                 s_data = seg_starts[s_idx]
                 curve_x, curve_y = [], []
-                for p in np.linspace(0, el['L'], 10):
+                for p in np.linspace(0, el.get('L', 0), 10):
                     cx, cy, _ = eval_seg_point(seg, p, s_data)
                     curve_x.append(cx)
                     curve_y.append(cy)
@@ -596,7 +620,7 @@ def draw_base_geometry(ax, nodes, elements, supports_list, seg_sections=None, se
         
         for i, seg in enumerate(segments):
             s_data = seg_starts[i]
-            mx, my, mth = eval_seg_point(seg, seg['L']/2, s_data)
+            mx, my, mth = eval_seg_point(seg, seg.get('L', 0)/2, s_data)
             rot_deg = math.degrees(mth)
             if rot_deg > 90: rot_deg -= 180
             elif rot_deg < -90: rot_deg += 180
@@ -610,21 +634,21 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
 
     scale_ld = 0.05
     for ld in loads:
-        i = ld['seg_idx']
+        i = ld.get('seg_idx', 0)
         s_data = seg_starts[i]
-        w1, w2 = ld['w1'], ld['w2']
+        w1, w2 = ld.get('w1', 0), ld.get('w2', 0)
         
-        num_pts = max(10, int((ld['end'] - ld['start']) / 0.1))
-        s_vals = np.linspace(ld['start'], ld['end'], num_pts)
+        num_pts = max(10, int((ld.get('end', 0) - ld.get('start', 0)) / 0.1))
+        s_vals = np.linspace(ld.get('start', 0), ld.get('end', 0), num_pts)
         poly_pts = []
         top_pts = []
         
         for sv in s_vals:
             px, py, th = eval_seg_point(segments[i], sv, s_data)
-            w_curr = w1 + (w2 - w1) * (sv - ld['start']) / max(1e-5, (ld['end'] - ld['start']))
+            w_curr = w1 + (w2 - w1) * (sv - ld.get('start', 0)) / max(1e-5, (ld.get('end', 0) - ld.get('start', 0)))
             hl = w_curr * scale_ld
             poly_pts.append((px, py))
-            if ld['dir'] == 'Gravity (Vertical ↓)':
+            if ld.get('dir') == 'Gravity (Vertical ↓)':
                 top_pts.append((px, py + hl))
             else:
                 c, s = math.cos(th), math.sin(th)
@@ -633,29 +657,29 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
         poly_pts.extend(top_pts[::-1])
         ax.add_patch(Polygon(poly_pts, facecolor='none', edgecolor='blue', lw=0.8, zorder=2))
 
-        num_arrows = max(3, int((ld['end'] - ld['start']) / 0.8))
+        num_arrows = max(3, int((ld.get('end', 0) - ld.get('start', 0)) / 0.8))
         for k in range(num_arrows):
             frac = k / (num_arrows - 1) if num_arrows > 1 else 0.5
-            sv = ld['start'] + frac * (ld['end'] - ld['start'])
+            sv = ld.get('start', 0) + frac * (ld.get('end', 0) - ld.get('start', 0))
             px_c, py_c, th_c = eval_seg_point(segments[i], sv, s_data)
             w_curr = w1 + frac * (w2 - w1)
             hl = w_curr * scale_ld
             arr_len = hl * 0.6 
             
-            if ld['dir'] == 'Gravity (Vertical ↓)':
+            if ld.get('dir') == 'Gravity (Vertical ↓)':
                 ax.arrow(px_c, py_c + arr_len, 0, -arr_len, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
             else:
                 c_c, s_c = math.cos(th_c), math.sin(th_c)
                 ax.arrow(px_c - s_c*arr_len, py_c + c_c*arr_len, s_c*arr_len, -c_c*arr_len, head_width=0.05, head_length=0.1, length_includes_head=True, fc='blue', ec='blue', lw=0.5, zorder=3)
 
-        px1, py1, th1 = eval_seg_point(segments[i], ld['start'], s_data)
-        hx1 = px1 if ld['dir'] == 'Gravity (Vertical ↓)' else px1 - math.sin(th1)*w1*scale_ld
-        hy1 = py1 + w1*scale_ld if ld['dir'] == 'Gravity (Vertical ↓)' else py1 + math.cos(th1)*w1*scale_ld
+        px1, py1, th1 = eval_seg_point(segments[i], ld.get('start', 0), s_data)
+        hx1 = px1 if ld.get('dir') == 'Gravity (Vertical ↓)' else px1 - math.sin(th1)*w1*scale_ld
+        hy1 = py1 + w1*scale_ld if ld.get('dir') == 'Gravity (Vertical ↓)' else py1 + math.cos(th1)*w1*scale_ld
         ax.text(hx1, hy1+0.2, f"{w1:.1f}", color='black', fontsize=6, ha='center', fontname='Arial')
 
-        px2, py2, th2 = eval_seg_point(segments[i], ld['end'], s_data)
-        hx2 = px2 if ld['dir'] == 'Gravity (Vertical ↓)' else px2 - math.sin(th2)*w2*scale_ld
-        hy2 = py2 + w2*scale_ld if ld['dir'] == 'Gravity (Vertical ↓)' else py2 + math.cos(th2)*w2*scale_ld
+        px2, py2, th2 = eval_seg_point(segments[i], ld.get('end', 0), s_data)
+        hx2 = px2 if ld.get('dir') == 'Gravity (Vertical ↓)' else px2 - math.sin(th2)*w2*scale_ld
+        hy2 = py2 + w2*scale_ld if ld.get('dir') == 'Gravity (Vertical ↓)' else py2 + math.cos(th2)*w2*scale_ld
         ax.text(hx2, hy2+0.2, f"{w2:.1f}", color='black', fontsize=6, ha='center', fontname='Arial')
 
 def draw_live_preview(nodes, elements, supports_list, seg_sections, loads, segments, seg_starts):
@@ -710,7 +734,7 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
         global_max = 0.0
         for el in elements:
             if el['type'] == 'frame' and el['group'] == 'segment': 
-                global_max = max(global_max, np.max(np.abs(el['internal'][val_key])))
+                global_max = max(global_max, np.max(np.abs(el.get('internal', {}).get(val_key, [0]))))
 
         for el in elements:
             if el['type'] != 'frame': continue
@@ -718,8 +742,10 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
             x1, y1 = nodes[n1]
             c, s, L = el['c'], el['s'], el['L']
             
-            xs = el['internal']['x']
-            vals = el['internal'][val_key]
+            xs = el.get('internal', {}).get('x', [])
+            vals = el.get('internal', {}).get(val_key, [])
+            if len(vals) == 0: continue
+            
             plot_vals = -vals if val_key != 'N' else vals
             
             px = x1 + c * xs - s * plot_vals * scale
@@ -773,14 +799,16 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
     max_def = 0.0
     for el in elements:
         if el['type'] == 'frame':
-            xs = el['internal']['x']
-            v_rel = el['internal']['v_rel'] * 20.0 
+            xs = el.get('internal', {}).get('x', [])
+            v_rel = el.get('internal', {}).get('v_rel', np.zeros_like(xs)) * 20.0 
+            if len(xs) == 0: continue
+            
             x1, y1 = nodes[el['n1']]
             c, s = el['c'], el['s']
             px = x1 + c * xs - s * v_rel
             py = y1 + s * xs + c * v_rel
             ax_d.plot(px, py, color='red', linestyle='--', linewidth=1.2, alpha=0.8)
-            max_def = max(max_def, np.max(np.abs(el['internal']['v_rel'])))
+            max_def = max(max_def, np.max(np.abs(el.get('internal', {}).get('v_rel', [0]))))
             
     if max_def > 0:
         ax_d.text(nodes[0][0], nodes[0][1]+1.0, f"Max Deflection = {max_def*1000:.2f} mm", color='red', fontsize=10, fontweight='bold')
@@ -826,7 +854,7 @@ def generate_chain_report(sys_data):
     add_line("="*50, bold=True)
     
     add_line(f"1. Geometry & Inputs:", bold=True)
-    add_line(f"- Total System Length = {sum([s['L'] for s in sys_data['segments']]):.2f} m")
+    add_line(f"- Total System Length = {sum([s.get('L', 0) for s in sys_data['segments']]):.2f} m")
     add_line(f"- Number of Segments = {len(sys_data['segments'])}")
     
     doc.add_paragraph()
@@ -889,11 +917,11 @@ def render_advanced_shape_module():
     uploaded_dxf = st.file_uploader("📥 Upload DXF File (.dxf)", type=['dxf'], key="dxf_uploader")
     
     if uploaded_dxf and st.button("Extract Data from DXF"):
-        st.session_state.clear() # 💡 مسح الذاكرة بالكامل عند رفع ملف جديد
+        st.session_state.clear() 
         dxf_data = parse_dxf_to_data(uploaded_dxf.getvalue())
         if dxf_data:
             st.session_state.dxf_parsed = dxf_data
-            st.session_state.num_loads_override = 0 # 💡 تصفير الأحمال الافتراضية
+            st.session_state.num_loads_override = 0 
             st.success("✅ DXF Parsed Successfully! Fields below have been auto-filled with ABSOLUTE accuracy.")
         else:
             st.error("❌ Failed to extract meaningful data. Check the format and try again.")
@@ -921,26 +949,28 @@ def render_advanced_shape_module():
                 if dxf_data and i < len(dxf_data['segments']):
                     d_seg = dxf_data['segments'][i]
                     is_dxf = d_seg.get('is_dxf', False)
+                    s_type_raw = d_seg.get('Shape Type', d_seg.get('type', 'Straight Line'))
                     
-                    if d_seg['Shape Type'] == 'Straight Line':
+                    if s_type_raw == 'Straight Line':
                         s_type_idx = 0
-                        def_L = d_seg['L']
-                        def_ang = d_seg['start_angle']
+                        def_L = d_seg.get('L', 3.0)
+                        def_ang = d_seg.get('start_angle', 60.0)
                         abs_p1 = d_seg.get('abs_p1')
                         abs_p2 = d_seg.get('abs_p2')
-                        def_smooth = False
-                    elif d_seg['Shape Type'] == 'Curve (Arc & Radius)':
+                        def_smooth = d_seg.get('smooth', False)
+                    elif s_type_raw == 'Curve (Arc & Radius)':
                         s_type_idx = 1
-                        def_R = d_seg['Radius (R) (m)']
-                        def_S = d_seg['L']
-                        def_ang = d_seg['start_angle']
-                        dir_crv_idx = 0 if "Down" in d_seg['Curvature Direction'] else 1
+                        def_R = d_seg.get('Radius (R) (m)', 5.0)
+                        def_S = d_seg.get('L', 3.0)
+                        def_ang = d_seg.get('start_angle', 0.0)
+                        dir_crv_val = d_seg.get('Curvature Direction', "Arching Up ⤴ (Concave)")
+                        dir_crv_idx = 0 if "Down" in dir_crv_val else 1
                         abs_c = d_seg.get('abs_c')
                         abs_r = d_seg.get('abs_r')
                         abs_sa = d_seg.get('abs_sa')
                         abs_ea = d_seg.get('abs_ea')
                         sweep = d_seg.get('sweep')
-                        def_smooth = False
+                        def_smooth = d_seg.get('smooth', False)
 
                 s_type = st.radio(f"Shape Type (S{i+1})", ["Straight Line", "Curve (Arc & Radius)", "Curve (Chord & Rise)"], index=s_type_idx, key=f"t_{i}", horizontal=True, on_change=reset_adv_state)
                 
@@ -961,7 +991,11 @@ def render_advanced_shape_module():
                     r_val = st.number_input(f"Radius (R) (m) [S{i+1}]", value=float(def_R), step=0.5, key=f"r_{i}", on_change=reset_adv_state)
                     L = st.number_input(f"Arc Length (S) (m) [S{i+1}]", value=float(def_S), step=0.5, key=f"al_{i}", on_change=reset_adv_state)
                     dir_crv = st.selectbox(f"Curvature Direction [S{i+1}]", ["Arching Down ⤵ (Convex)", "Arching Up ⤴ (Concave)"], index=dir_crv_idx, key=f"d_{i}", on_change=reset_adv_state)
-                    kappa = -1.0/r_val if "Down" in dir_crv else 1.0/r_val
+                    
+                    if is_dxf and abs_r is not None and abs(r_val - abs_r) < 0.01:
+                        kappa = 1.0 / abs_r if "Up" in dir_crv else -1.0 / abs_r
+                    else:
+                        kappa = -1.0/r_val if "Down" in dir_crv else 1.0/r_val
                 else:
                     L_c = st.number_input(f"Chord Length (m) [S{i+1}]", value=4.0, step=0.5, key=f"c_{i}", on_change=reset_adv_state)
                     h = st.number_input(f"Rise (m) [S{i+1}]", value=1.0, step=0.1, key=f"h_{i}", on_change=reset_adv_state)
@@ -972,7 +1006,7 @@ def render_advanced_shape_module():
                     kappa = -1.0/r_val if "Down" in dir_crv else 1.0/r_val
                     st.info(f"💡 Calculated Arc Length = {L:.2f} m | Radius = {r_val:.2f} m")
                 
-                seg_info = {'type': s_type, 'L': L, 'kappa': kappa, 'smooth': smooth, 'start_angle': start_angle}
+                seg_info = {'type': s_type, 'Shape Type': s_type, 'L': L, 'kappa': kappa, 'smooth': smooth, 'start_angle': start_angle}
                 if is_dxf:
                     seg_info['is_dxf'] = True
                     if s_type == "Straight Line":
@@ -1033,7 +1067,7 @@ def render_advanced_shape_module():
                 l_dir = lc3.selectbox("Direction", ["Gravity (Vertical ↓)", "Perpendicular (Local ↘)"], key=f"ld_d_{i}", on_change=reset_adv_state)
                 
                 sc1, sc2, sc3 = st.columns(3)
-                max_s = float(segments[s_idx_num]['L'])
+                max_s = float(segments[s_idx_num].get('L', 0.0))
                 start = sc1.number_input("Start Arc Dist (m)", 0.0, max_s, 0.0, key=f"ld_st_{i}", on_change=reset_adv_state)
                 w1 = sc2.number_input("Value W1 (kN)", value=15.0, key=f"ld_w1_{i}", on_change=reset_adv_state)
                 
@@ -1068,19 +1102,19 @@ def render_advanced_shape_module():
         for i in range(int(num_struts)):
             with st.expander(f"📏 Strut P{i+1}", expanded=(num_struts<3)):
                 def_s_idx = 0
-                def_dist = float(segments[0]['L'])/2 if segments else 1.0
+                def_dist = float(segments[0].get('L', 0.0))/2 if segments else 1.0
                 def_gx, def_gy = 3.0, 0.0
                 if dxf_data and i < len(dxf_data['struts']):
                     ds = dxf_data['struts'][i]
-                    def_s_idx = ds['seg_idx']
-                    def_dist = ds['dist']
-                    def_gx = ds['gx']
+                    def_s_idx = ds.get('seg_idx', 0)
+                    def_dist = ds.get('dist', 0.0)
+                    def_gx = ds.get('gx', 0.0)
                     def_gy = ds.get('gy', 0.0)
                     
                 cc1, cc2, cc3, cc4 = st.columns(4)
                 s_idx = cc1.selectbox("On Seg No.", seg_choices, index=def_s_idx, key=f"st_s_{i}", on_change=reset_adv_state)
                 s_idx_num = int(s_idx[1:]) - 1
-                dist = cc2.number_input("Arc Dist (m)", 0.0, float(segments[s_idx_num]['L']), value=float(def_dist), key=f"st_d_{i}", on_change=reset_adv_state)
+                dist = cc2.number_input("Arc Dist (m)", 0.0, float(segments[s_idx_num].get('L', 0.0)), value=float(def_dist), key=f"st_d_{i}", on_change=reset_adv_state)
                 gx = cc3.number_input("Ground X (m)", value=float(def_gx), step=0.5, key=f"st_gx_{i}", on_change=reset_adv_state)
                 st_sec = cc4.selectbox(f"P{i+1} Type", strut_opts, index=strut_opts.index(master_strut) if master_strut in strut_opts else 0, key=f"st_sec_{i}", on_change=reset_adv_state)
                 struts_data.append({'seg_idx': s_idx_num, 's_dist': dist, 'gx': gx, 'gy': def_gy, 'sec': st_sec})
@@ -1093,12 +1127,13 @@ def render_advanced_shape_module():
             sp1, sp2 = st.columns(2)
             def_sx, def_sy = float((i+1)*2.0), 0.0
             if dxf_data and i < len(dxf_data['supports']):
-                def_sx = dxf_data['supports'][i]['x']
+                def_sx = dxf_data['supports'][i].get('x', 0.0)
                 def_sy = dxf_data['supports'][i].get('y', 0.0)
             sx = sp1.number_input(f"Sup G{i+1} X (m)", value=float(def_sx), on_change=reset_adv_state, key=f"sx_{i}")
             styp = sp2.selectbox(f"Sup G{i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}", on_change=reset_adv_state)
             base_sups.append({'x': sx, 'y': def_sy, 'type': styp})
 
+    # Dummy corner support logic bypassed for DXF mode
     nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, seg_sections, loads_data, struts_data, None, base_sups, {'type': 'Hinged', 'angle': 0})
 
     with c_plot:
@@ -1169,8 +1204,8 @@ def render_advanced_shape_module():
             max_m, max_v = 0.0, 0.0
             for el in fea_data['elements']:
                 if el.get('group') == 'segment' and el.get('seg_idx') == i:
-                    max_m = max(max_m, np.max(np.abs(el['internal']['M'])))
-                    max_v = max(max_v, np.max(np.abs(el['internal']['V'])))
+                    max_m = max(max_m, np.max(np.abs(el.get('internal', {}).get('M', [0]))))
+                    max_v = max(max_v, np.max(np.abs(el.get('internal', {}).get('V', [0]))))
             
             s_status = "SAFE" if max_m <= sec['Mall'] and max_v <= sec['Qall'] else "UNSAFE"
             safety_data.append({
