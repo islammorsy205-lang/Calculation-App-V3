@@ -26,11 +26,10 @@ except ImportError:
     ezdxf = None
 
 try:
-    # يتم استدعاء قواعد البيانات من ملف config.py لتخفيف حجم هذا الملف
     from config import SECTIONS_DB, STRUTS_DB
     from report_builder import insert_blue_banner, add_eq, append_pdf_stream_to_word
 except ImportError:
-    st.error("⚠️ برجاء التأكد من وجود ملفات config.py و report_builder.py في نفس المجلد.")
+    st.error("⚠️ برجاء التأكد من وجود ملفات config.py و report_builder.py")
 
 # =========================================================
 # 0. Helper Functions & Styles
@@ -80,7 +79,7 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
             color=arr_c, fontsize=7, fontname='Arial', ha='center', va='center')
 
 # =========================================================
-# 1. DXF Parsing Engine (Absolute DXF Origin 0,0)
+# 1. DXF Parsing Engine (Absolute Mathematical Precision)
 # =========================================================
 def parse_dxf_to_data(file_bytes):
     if ezdxf is None: return None
@@ -108,7 +107,6 @@ def parse_dxf_to_data(file_bytes):
             lyr = e.dxf.layer
             etype = e.dxftype()
             
-            # قراءة الدعامات
             if match_layer(lyr, "supp"):
                 if etype in ['POINT', 'CIRCLE', 'INSERT']:
                     if etype == 'POINT':
@@ -118,7 +116,6 @@ def parse_dxf_to_data(file_bytes):
                     elif etype == 'INSERT':
                         raw_supports.append({'x': e.dxf.insert.x, 'y': e.dxf.insert.y})
             
-            # قراءة النهايز
             elif match_layer(lyr, "push") or match_layer(lyr, "pull"):
                 entities = [e]
                 if etype in ['LWPOLYLINE', 'POLYLINE']:
@@ -127,7 +124,6 @@ def parse_dxf_to_data(file_bytes):
                     if sub_e.dxftype() == 'LINE':
                         raw_struts.append({'p1': (sub_e.dxf.start.x, sub_e.dxf.start.y), 'p2': (sub_e.dxf.end.x, sub_e.dxf.end.y)})
                     
-            # قراءة الفريمات (السولجر)
             elif match_layer(lyr, "frame"):
                 entities = [e]
                 if etype in ['LWPOLYLINE', 'POLYLINE']:
@@ -143,8 +139,27 @@ def parse_dxf_to_data(file_bytes):
                         raw_frames.append({'type': 'arc', 'c': (c.x, c.y), 'r': r, 'sa': sa, 'ea': ea})
 
         if not raw_frames: return None
+
+        if raw_supports:
+            raw_supports.sort(key=lambda s: s['x'])
+            dx = -raw_supports[0]['x']
+            dy = -raw_supports[0]['y']
+            
+            for sp in raw_supports:
+                sp['x'] += dx
+                sp['y'] += dy
+                
+            for f in raw_frames:
+                if f['type'] == 'line':
+                    f['p1'] = (f['p1'][0] + dx, f['p1'][1] + dy)
+                    f['p2'] = (f['p2'][0] + dx, f['p2'][1] + dy)
+                elif f['type'] == 'arc':
+                    f['c'] = (f['c'][0] + dx, f['c'][1] + dy)
+                    
+            for s in raw_struts:
+                s['p1'] = (s['p1'][0] + dx, s['p1'][1] + dy)
+                s['p2'] = (s['p2'][0] + dx, s['p2'][1] + dy)
         
-        # ترتيب الفريمات برمجياً من اليسار لليمين بدون التأثير على الإحداثيات
         def get_min_x(f):
             if f['type'] == 'line': return min(f['p1'][0], f['p2'][0])
             return f['c'][0] - f['r']
@@ -154,7 +169,6 @@ def parse_dxf_to_data(file_bytes):
         for f in raw_frames:
             if f['type'] == 'line':
                 p_start, p_end = f['p1'], f['p2']
-                # توحيد اتجاهات المحاور المحلية لضمان تماثل الـ Moments
                 if p_start[0] > p_end[0] + 1e-5 or (abs(p_start[0] - p_end[0]) < 1e-5 and p_start[1] > p_end[1]):
                     p_start, p_end = p_end, p_start
                     
@@ -180,7 +194,6 @@ def parse_dxf_to_data(file_bytes):
                     'abs_sa': sa, 'abs_ea': ea, 'sweep': sweep, 'kappa': 1.0/f['r']
                 })
 
-        # خوارزمية الربط الرياضي المتجهي (Vector Projection) لتحديد نقاط التقطيع
         def get_closest_segment_exact(pt, segs):
             min_d = 9999.0
             best_idx = 0
@@ -241,7 +254,6 @@ def parse_dxf_to_data(file_bytes):
         supps_mapped = []
         for sp in raw_supports:
             d_min, b_seg, b_s = get_closest_segment_exact((sp['x'], sp['y']), chained_segs)
-            # دقة صارمة لتحديد التلامس مع القطاع
             if d_min < 0.1:
                 supps_mapped.append({'x': sp['x'], 'y': sp['y'], 'type': 'Hinged', 'seg_idx': b_seg, 's_dist': b_s})
             else:
@@ -258,7 +270,7 @@ def parse_dxf_to_data(file_bytes):
             except: pass
 
 # =========================================================
-# 2. Geometry & Mesh Generators (Auto-Meshing Engine)
+# 2. Geometry & Mesh Generators (Absolute Eval Engine)
 # =========================================================
 def eval_seg_point(seg, s_val, start_data=None):
     L = seg.get('L', 0.0)
@@ -268,7 +280,6 @@ def eval_seg_point(seg, s_val, start_data=None):
     is_dxf = seg.get('is_dxf', False)
     shape_type = seg.get('Shape Type', 'Straight Line')
     
-    # التنفيذ المطلق للإحداثيات في حالة الكاد
     if is_dxf:
         if shape_type == 'Straight Line' and 'abs_p1' in seg:
             p1, p2 = seg['abs_p1'], seg['abs_p2']
@@ -287,7 +298,6 @@ def eval_seg_point(seg, s_val, start_data=None):
             th = current_ang + math.pi/2
             return px, py, th
             
-    # التنفيذ البارامتري في حالة الإدخال اليدوي
     if start_data:
         x0, y0, th0, kappa = start_data.get('x0', 0), start_data.get('y0', 0), start_data.get('th0', 0), start_data.get('kappa', 0)
         if abs(kappa) < 1e-6: 
@@ -337,7 +347,6 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
     elements = []
     nodal_loads = []
     
-    # سماحية دقيقة جداً لضمان الالتحام الكلي للنقاط
     node_tol = 1e-4 
     
     def get_or_add_node(x, y):
@@ -362,7 +371,6 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
         kappa = seg.get('kappa', 0.0)
         seg_start_data.append({'x0': curr_x, 'y0': curr_y, 'th0': curr_th, 'kappa': kappa})
         
-        # استخراج النقاط الهامة لكسر الفريم عندها إجبارياً
         key_s_vals = [0.0, L]
         for st_item in struts:
             if st_item.get('seg_idx') == i: key_s_vals.append(st_item['s_dist'])
@@ -377,7 +385,6 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
         num_sub = max(1, int(np.ceil(L / mesh_size)))
         for p in np.linspace(0, L, num_sub+1): keys.append(p)
             
-        # دقة 5 أرقام عشرية لمنع التشوهات
         keys = sorted(list(set([min(max(round(k, 5), 0.0), round(L, 5)) for k in keys])))
         
         node_indices = []
@@ -407,14 +414,14 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
                         wa = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j] - ld['start']) / L_ld
                         wb = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j+1] - ld['start']) / L_ld
                         
-                        # تحليل قوى الحمل لمركبات تتوافق مع الساب 2000
-                        if 'Global Z' in ld['dir']: # الحمل الرأسي
+                        dir_str = ld.get('dir', '')
+                        if 'Global Z' in dir_str or 'Global Y' in dir_str:
                             p_x1 += wa * s_t; p_y1 += wa * c_t
                             p_x2 += wb * s_t; p_y2 += wb * c_t
-                        elif 'Global X' in ld['dir']: # الحمل الأفقي
+                        elif 'Global X' in dir_str:
                             p_x1 += wa * c_t; p_y1 -= wa * s_t
                             p_x2 += wb * c_t; p_y2 -= wb * s_t
-                        else: # الحمل العمودي
+                        else: # Local
                             p_x1 += 0.0; p_y1 += wa
                             p_x2 += 0.0; p_y2 += wb
                             
@@ -431,9 +438,10 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
                 try:
                     idx = keys.index(round(ld['start'], 5))
                     nid = node_indices[idx]
-                    if 'Global Z' in ld['dir']:
+                    dir_str = ld.get('dir', '')
+                    if 'Global Z' in dir_str or 'Global Y' in dir_str:
                         nodal_loads.append({'node': nid, 'Fx': 0.0, 'Fy': ld['w1']})
-                    elif 'Global X' in ld['dir']:
+                    elif 'Global X' in dir_str:
                         nodal_loads.append({'node': nid, 'Fx': ld['w1'], 'Fy': 0.0})
                     else: 
                         _, _, th_pt = eval_seg_point(seg, ld['start'], seg_start_data[i])
@@ -454,7 +462,6 @@ def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, 
         top_node = get_or_add_node(nx, ny)
         bot_node = get_or_add_node(gx, gy)
         
-        # النهايز عبارة عن عناصر ضغط وشد فقط Moment Released
         elements.append({
             'type': 'truss', 'group': 'strut', 'sec': st_item.get('sec', 'Unknown'),
             'n1': bot_node, 'n2': top_node, 'strut_idx': st_idx,
@@ -572,7 +579,14 @@ def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
         
         if el['type'] == 'truss':
             N_val = (E * A / L) * (u_loc[3] - u_loc[0])
-            el['internal'].update({'N': [N_val, N_val], 'V': [0,0], 'M': [0,0], 'x': [0, L], 'v_rel': [0,0]})
+            xs = np.linspace(0, L, 51)
+            el['internal'].update({
+                'N': np.full_like(xs, N_val),
+                'V': np.zeros_like(xs),
+                'M': np.zeros_like(xs),
+                'x': xs,
+                'v_rel': np.zeros_like(xs)
+            })
         else:
             k_loc = np.array([
                 [E*A/L, 0, 0, -E*A/L, 0, 0], [0, 12*E*I/L**3, 6*E*I/L**2, 0, -12*E*I/L**3, 6*E*I/L**2],
@@ -704,9 +718,10 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
             w_val = w_curr * scale_ld
             poly_pts.append((px, py))
             
-            if 'Global Z' in ld.get('dir', ''):
+            dir_str = ld.get('dir', '')
+            if 'Global Z' in dir_str or 'Global Y' in dir_str:
                 f_vx, f_vy = 0.0, w_val
-            elif 'Global X' in ld.get('dir', ''):
+            elif 'Global X' in dir_str:
                 f_vx, f_vy = w_val, 0.0
             else:
                 c, s = math.cos(th), math.sin(th)
@@ -726,9 +741,10 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
                 w_curr = w1 + frac * (w2 - w1)
                 w_val = w_curr * scale_ld
                 
-                if 'Global Z' in ld.get('dir', ''):
+                dir_str = ld.get('dir', '')
+                if 'Global Z' in dir_str or 'Global Y' in dir_str:
                     f_vx, f_vy = 0.0, w_val
-                elif 'Global X' in ld.get('dir', ''):
+                elif 'Global X' in dir_str:
                     f_vx, f_vy = w_val, 0.0
                 else:
                     c_c, s_c = math.cos(th_c), math.sin(th_c)
@@ -738,8 +754,9 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
 
             px1, py1, th1 = eval_seg_point(segments[i], ld.get('start', 0), s_data)
             w_val_1 = w1 * scale_ld
-            if 'Global Z' in ld.get('dir', ''): f_vx, f_vy = 0.0, w_val_1
-            elif 'Global X' in ld.get('dir', ''): f_vx, f_vy = w_val_1, 0.0
+            dir_str = ld.get('dir', '')
+            if 'Global Z' in dir_str or 'Global Y' in dir_str: f_vx, f_vy = 0.0, w_val_1
+            elif 'Global X' in dir_str: f_vx, f_vy = w_val_1, 0.0
             else:
                 c_t, s_t = math.cos(th1), math.sin(th1)
                 f_vx, f_vy = -s_t * w_val_1, c_t * w_val_1
@@ -747,8 +764,8 @@ def draw_loads_and_geometry(ax, nodes, elements, supports_list, seg_sections, lo
 
             px2, py2, th2 = eval_seg_point(segments[i], ld.get('end', 0), s_data)
             w_val_2 = w2 * scale_ld
-            if 'Global Z' in ld.get('dir', ''): f_vx, f_vy = 0.0, w_val_2
-            elif 'Global X' in ld.get('dir', ''): f_vx, f_vy = w_val_2, 0.0
+            if 'Global Z' in dir_str or 'Global Y' in dir_str: f_vx, f_vy = 0.0, w_val_2
+            elif 'Global X' in dir_str: f_vx, f_vy = w_val_2, 0.0
             else:
                 c_t, s_t = math.cos(th2), math.sin(th2)
                 f_vx, f_vy = -s_t * w_val_2, c_t * w_val_2
@@ -791,6 +808,7 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
             
     figs_dict['React'] = safe_render_fig(fig_r)
     
+    # 💡 الدالة المحسنة لرسم العزوم، النورمال، الشير - تشمل الفريمات والنهايز
     def create_force_plot(val_key, scale, c_pos, c_neg):
         fig_f, ax_f = plt.subplots(figsize=(6, 5))
         ax_f.set_aspect('equal', adjustable='datalim')
@@ -805,18 +823,18 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
 
         global_max = 0.0
         for el in elements:
-            if el['type'] == 'frame' and el.get('group') == 'segment': 
-                global_max = max(global_max, np.max(np.abs(el.get('internal', {}).get(val_key, [0]))))
+            vals = el.get('internal', {}).get(val_key, [0])
+            global_max = max(global_max, np.max(np.abs(vals)))
 
         for el in elements:
-            if el['type'] != 'frame': continue
             n1, n2 = el['n1'], el['n2']
             x1, y1 = nodes[n1]
+            x2, y2 = nodes[n2]
             c, s, L = el.get('c', 1), el.get('s', 0), el.get('L', 0)
             
             xs = el.get('internal', {}).get('x', [])
             vals = el.get('internal', {}).get(val_key, [])
-            if len(vals) == 0: continue
+            if len(vals) == 0 or np.all(np.abs(vals) < 1e-4): continue
             
             plot_vals = -vals if val_key != 'N' else vals
             
@@ -828,7 +846,7 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
                 ax_f.plot([px[k], px[k+1]], [py[k], py[k+1]], color=color, lw=0.8)
                 
             ax_f.plot([x1, px[0]], [y1, py[0]], color=c_pos if vals[0]>=0 else c_neg, lw=0.8)
-            ax_f.plot([x1+c*L, px[-1]], [y1+s*L, py[-1]], color=c_pos if vals[-1]>=0 else c_neg, lw=0.8)
+            ax_f.plot([x2, px[-1]], [y2, py[-1]], color=c_pos if vals[-1]>=0 else c_neg, lw=0.8)
 
             num_lines = max(2, int(L / 0.4))
             for i in range(1, num_lines):
@@ -850,12 +868,7 @@ def plot_sap2000_diagrams(nodes, elements, R_reactions, scales, display_nodes, s
                     global_texts.append((tx, ty))
 
             if len(vals) > 0:
-                if n1 in display_nodes: plot_val(0)
-                if n2 in display_nodes: plot_val(-1)
-                
-                max_idx = np.argmax(np.abs(vals))
-                if max_idx > 0 and max_idx < len(vals)-1:
-                    if abs(vals[max_idx]) > global_max * 0.1: plot_val(max_idx)
+                plot_val(len(vals)//2)
                 
         return safe_render_fig(fig_f)
 
@@ -982,10 +995,15 @@ def reset_adv_state():
 def render_advanced_shape_module():
     st.markdown("## 🎢 The Chain Builder (Multi-Segment & CAD Integration)")
     
-    st.info("💡 **Tip:** استخدم `Ctrl+Z` داخل أي مربع أرقام للاسترجاع وتصحيح الخطأ فوراً (مفعلة تلقائياً عبر متصفحك).")
+    st.info("💡 **Tip:** يمكنك الضغط على `Ctrl+Z` لتحديد التراجع السريع عند تعديل مربعات الأرقام.")
 
     if 'adv_solved' not in st.session_state:
         st.session_state.adv_solved = False
+
+    # 💡 خيار تحديد اتجاه المسقط المنشأ في البداية (Section vs Plan)
+    view_plane = st.radio("📐 Structural Analysis Plane / System Projection", 
+                          ["Section View (XZ Axes - Vertical System)", "Plan View (XY Axes - Horizontal System)"], 
+                          horizontal=True, on_change=reset_adv_state)
 
     c_upload, c_mesh = st.columns([2, 1])
     with c_upload:
@@ -1004,7 +1022,7 @@ def render_advanced_shape_module():
         if dxf_data:
             st.session_state.dxf_parsed = dxf_data
             st.session_state.num_loads_override = 0 
-            st.success("✅ DXF Parsed Successfully! Geometry locked with absolute CAD coordinates. (J1 maintained at original 0,0 alignment)")
+            st.success("✅ DXF Parsed Successfully! Absolute Origin (0,0) and Alignment Preserved.")
         else:
             st.error("❌ Failed to extract meaningful data. Check the format and try again.")
 
@@ -1165,12 +1183,15 @@ def render_advanced_shape_module():
         num_loads = st.number_input("Count of Loads", 0, 30, num_loads_def, on_change=reset_adv_state)
         loads_data = []
         
+        # تغيير خيارات المحاور ديناميكياً حسب اختيار المسقط (Section XZ vs Plan XY)
+        dir_options = ["Global Z (Vertical ↑+, ↓-)", "Global X (Horizontal →+, ←-)", "Local Z (Perpendicular ↗+, ↙-)"] if "Section" in view_plane else ["Global Y (Vertical ↑+, ↓-)", "Global X (Horizontal →+, ←-)", "Local Y (Perpendicular ↗+, ↙-)"]
+
         for i in range(int(num_loads)):
             with st.expander(f"📥 Load Item {i+1}", expanded=(i==0)):
                 col_l1, col_l2, col_l3 = st.columns(3)
                 load_category = col_l1.selectbox("Load Category", ["Dead Load", "Live Load"], key=f"ld_cat_{i}", on_change=reset_adv_state)
                 l_type = col_l2.selectbox("Type", ["Uniform", "Trapezoidal", "Point Load"], key=f"ld_t_{i}", on_change=reset_adv_state)
-                l_dir = col_l3.selectbox("Direction", ["Global Z (Vertical ↑+, ↓-)", "Global X (Horizontal →+, ←-)", "Local Z (Perpendicular ↗+, ↙-)"], key=f"ld_d_{i}", on_change=reset_adv_state)
+                l_dir = col_l3.selectbox("Direction", dir_options, key=f"ld_d_{i}", on_change=reset_adv_state)
                 
                 target_mode = st.radio("Apply Load To:", ["Single Segment", "Multiple Segments", "Total System (All Segments)"], key=f"ld_mode_{i}", horizontal=True, on_change=reset_adv_state)
                 
@@ -1263,8 +1284,11 @@ def render_advanced_shape_module():
                     is_dxf_strut = True
                     
                 if is_dxf_strut:
-                    nx, ny = get_approx_xy(segments, def_s_idx, def_dist)
+                    nx, ny, _ = eval_seg_point(segments[def_s_idx], def_dist, seg_start_data=None if segments[def_s_idx].get('is_dxf') else None)
+                    if not segments[def_s_idx].get('is_dxf'):
+                        nx, ny = get_approx_xy(segments, def_s_idx, def_dist)
                     actual_L = math.hypot(def_gx - nx, def_gy - ny)
+                    
                     st.success(f"🔒 DXF Strut Mapped: S{def_s_idx+1} | Length: {actual_L:.2f}m")
                     
                     valid_opts = []
