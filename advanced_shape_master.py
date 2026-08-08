@@ -66,7 +66,9 @@ def safe_render_fig(fig):
         plt.close(fig)
 
 def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
-    if abs(force_mag) < 0.1: return
+    if abs(force_mag) < 0.1:
+        return
+        
     arr_L = 0.5  
     sgn = np.sign(force_mag)
     dx = sgn * axis_nx
@@ -74,31 +76,102 @@ def draw_reaction_arrow(ax, node_x, node_y, force_mag, axis_nx, axis_ny):
     start_x = node_x - arr_L * dx
     start_y = node_y - arr_L * dy
     arr_c = 'blue' if force_mag >= 0 else 'red'
+    
     ax.arrow(
         start_x, start_y, arr_L*dx, arr_L*dy, 
         length_includes_head=True, 
         head_width=0.08, head_length=0.12, 
         fc=arr_c, ec=arr_c, lw=0.8, zorder=5
     )
+    
     ax.text(
         start_x - 0.15*dx, start_y - 0.15*dy, 
-        f"{force_mag:+.1f}", color=arr_c, fontsize=7, fontname='Arial', 
+        f"{force_mag:+.1f}", 
+        color=arr_c, fontsize=7, fontname='Arial', 
         ha='center', va='center'
     )
 
 def point_on_line(px, py, x1, y1, x2, y2, tol=1e-3):
     L2 = (x2-x1)**2 + (y2-y1)**2
-    if L2 == 0: return False
+    if L2 == 0:
+        return False
+        
     t = max(0, min(1, ((px-x1)*(x2-x1) + (py-y1)*(y2-y1)) / L2))
     projX = x1 + t*(x2-x1)
     projY = y1 + t*(y2-y1)
+    
     return math.hypot(px-projX, py-projY) < tol
 
+def get_closest_segment_exact(pt, segs):
+    min_d = 9999.0
+    best_idx = 0
+    best_s = 0.0
+    pt = np.array(pt)
+    
+    for idx, seg in enumerate(segs):
+        L = seg.get('L', 0.0)
+        
+        if seg.get('Shape Type') == 'Straight Line' and 'abs_p1' in seg:
+            p1 = np.array(seg['abs_p1'])
+            p2 = np.array(seg['abs_p2'])
+            v = p2 - p1
+            w = pt - p1
+            c2 = np.dot(v, v)
+            
+            if c2 > 1e-6:
+                ratio = np.dot(w, v) / c2
+            else:
+                ratio = 0.0
+                
+            ratio = max(0.0, min(1.0, ratio))
+            proj = p1 + ratio * v
+            d = np.linalg.norm(pt - proj)
+            
+            if d < min_d:
+                min_d = d
+                best_idx = idx
+                best_s = ratio * L
+                
+        elif seg.get('Shape Type') == 'Curve (Arc & Radius)' and 'abs_c' in seg:
+            c = np.array(seg['abs_c'])
+            r = seg['abs_r']
+            v = pt - c
+            ang = math.atan2(v[1], v[0])
+            sa = seg['abs_sa']
+            sweep = seg['sweep']
+            
+            ang_norm = (ang - sa) % (2 * math.pi)
+            
+            if ang_norm > abs(sweep):
+                if ang_norm < math.pi:
+                    ratio = 1.0
+                else:
+                    ratio = 0.0
+            else:
+                if abs(sweep) > 1e-6:
+                    ratio = ang_norm / sweep
+                else:
+                    ratio = 0.0
+            
+            ratio = max(0.0, min(1.0, ratio))
+            current_ang = sa + ratio * sweep
+            proj = c + r * np.array([math.cos(current_ang), math.sin(current_ang)])
+            d = np.linalg.norm(pt - proj)
+            
+            if d < min_d:
+                min_d = d
+                best_idx = idx
+                best_s = ratio * L
+                
+    return min_d, best_idx, best_s
+
 # =========================================================
-# 1. DXF Parsing Engine 
+# 1. DXF Parsing Engine (Absolute Mathematical Precision)
 # =========================================================
 def extract_dxf_for_interactive(file_bytes):
-    if ezdxf is None: return None
+    if ezdxf is None:
+        return None
+        
     tmp_path = ""
     try:
         try:
@@ -119,30 +192,529 @@ def extract_dxf_for_interactive(file_bytes):
         
         for e in msp:
             lyr = e.dxf.layer.lower()
+            
             if "supp" in lyr:
                  if e.dxftype() == 'POINT':
                      supports.append({'x': e.dxf.location.x, 'y': e.dxf.location.y})
                  elif e.dxftype() == 'CIRCLE':
                      supports.append({'x': e.dxf.center.x, 'y': e.dxf.center.y})
+                     
             elif "push" in lyr or "pull" in lyr:
                  if e.dxftype() == 'LINE':
-                     struts.append({'p1': [e.dxf.start.x, e.dxf.start.y], 'p2': [e.dxf.end.x, e.dxf.end.y]})
+                     struts.append({
+                         'p1': [e.dxf.start.x, e.dxf.start.y], 
+                         'p2': [e.dxf.end.x, e.dxf.end.y]
+                     })
+                     
             elif "frame" in lyr:
                  if e.dxftype() == 'LINE':
-                     frames.append({'x1': e.dxf.start.x, 'y1': e.dxf.start.y, 'x2': e.dxf.end.x, 'y2': e.dxf.end.y})
+                     frames.append({
+                         'x1': e.dxf.start.x, 
+                         'y1': e.dxf.start.y, 
+                         'x2': e.dxf.end.x, 
+                         'y2': e.dxf.end.y
+                     })
                      
         return {'frames': frames, 'struts': struts, 'supports': supports}
+        
     except Exception as e:
         return None
     finally:
         if tmp_path and os.path.exists(tmp_path):
-            try: os.remove(tmp_path)
-            except: pass
+            try:
+                os.remove(tmp_path)
+            except:
+                pass
+
+def parse_dxf_to_data(file_bytes):
+    if ezdxf is None:
+        return None
+        
+    tmp_path = ""
+    try:
+        try:
+            dxf_str = file_bytes.decode('utf-8')
+        except UnicodeDecodeError:
+            dxf_str = file_bytes.decode('cp1252', errors='ignore')
+            
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".dxf", mode='w', encoding='utf-8') as tmp:
+            tmp.write(dxf_str)
+            tmp_path = tmp.name
+            
+        doc = ezdxf.readfile(tmp_path)
+        msp = doc.modelspace()
+        
+        raw_frames = []
+        raw_struts = []
+        raw_supports = []
+        
+        def match_layer(layer, target):
+            l_clean = layer.lower().replace(" ", "").replace("_", "")
+            return target in l_clean
+        
+        for e in msp:
+            lyr = e.dxf.layer
+            etype = e.dxftype()
+            
+            if match_layer(lyr, "supp"):
+                if etype in ['POINT', 'CIRCLE', 'INSERT']:
+                    if etype == 'POINT':
+                        raw_supports.append({'x': e.dxf.location.x, 'y': e.dxf.location.y})
+                    elif etype == 'CIRCLE':
+                        raw_supports.append({'x': e.dxf.center.x, 'y': e.dxf.center.y})
+                    elif etype == 'INSERT':
+                        raw_supports.append({'x': e.dxf.insert.x, 'y': e.dxf.insert.y})
+            
+            elif match_layer(lyr, "push") or match_layer(lyr, "pull"):
+                entities = [e]
+                if etype in ['LWPOLYLINE', 'POLYLINE']:
+                    entities = list(e.virtual_entities())
+                for sub_e in entities:
+                    if sub_e.dxftype() == 'LINE':
+                        raw_struts.append({
+                            'p1': (sub_e.dxf.start.x, sub_e.dxf.start.y), 
+                            'p2': (sub_e.dxf.end.x, sub_e.dxf.end.y)
+                        })
+                    
+            elif match_layer(lyr, "frame"):
+                entities = [e]
+                if etype in ['LWPOLYLINE', 'POLYLINE']:
+                    entities = list(e.virtual_entities())
+                for sub_e in entities:
+                    if sub_e.dxftype() == 'LINE':
+                        raw_frames.append({
+                            'type': 'line', 
+                            'p1': (sub_e.dxf.start.x, sub_e.dxf.start.y), 
+                            'p2': (sub_e.dxf.end.x, sub_e.dxf.end.y)
+                        })
+                    elif sub_e.dxftype() == 'ARC':
+                        c = sub_e.dxf.center
+                        r = sub_e.dxf.radius
+                        sa = math.radians(sub_e.dxf.start_angle)
+                        ea = math.radians(sub_e.dxf.end_angle)
+                        raw_frames.append({
+                            'type': 'arc', 
+                            'c': (c.x, c.y), 
+                            'r': r, 
+                            'sa': sa, 
+                            'ea': ea
+                        })
+
+        if not raw_frames:
+            return None
+
+        if raw_supports:
+            raw_supports.sort(key=lambda s: s['x'])
+            dx = -raw_supports[0]['x']
+            dy = -raw_supports[0]['y']
+            
+            for sp in raw_supports:
+                sp['x'] += dx
+                sp['y'] += dy
+                
+            for f in raw_frames:
+                if f['type'] == 'line':
+                    f['p1'] = (f['p1'][0] + dx, f['p1'][1] + dy)
+                    f['p2'] = (f['p2'][0] + dx, f['p2'][1] + dy)
+                elif f['type'] == 'arc':
+                    f['c'] = (f['c'][0] + dx, f['c'][1] + dy)
+                    
+            for s in raw_struts:
+                s['p1'] = (s['p1'][0] + dx, s['p1'][1] + dy)
+                s['p2'] = (s['p2'][0] + dx, s['p2'][1] + dy)
+        
+        def get_min_x(f):
+            if f['type'] == 'line':
+                return min(f['p1'][0], f['p2'][0])
+            return f['c'][0] - f['r']
+            
+        raw_frames.sort(key=get_min_x)
+
+        chained_segs = []
+        for f in raw_frames:
+            if f['type'] == 'line':
+                p_start = f['p1']
+                p_end = f['p2']
+                
+                if p_start[0] > p_end[0] + 1e-5 or (abs(p_start[0] - p_end[0]) < 1e-5 and p_start[1] > p_end[1]):
+                    p_start, p_end = p_end, p_start
+                    
+                dx_line = p_end[0]-p_start[0]
+                dy_line = p_end[1]-p_start[1]
+                L = math.hypot(dx_line, dy_line)
+                ang = math.degrees(math.atan2(dy_line, dx_line))
+                
+                chained_segs.append({
+                    'type': 'Straight Line', 
+                    'Shape Type': 'Straight Line', 
+                    'L': L, 
+                    'start_angle': ang, 
+                    'smooth': False, 
+                    'is_dxf': True, 
+                    'abs_p1': p_start, 
+                    'abs_p2': p_end, 
+                    'kappa': 0.0
+                })
+                
+            elif f['type'] == 'arc':
+                sa = f['sa']
+                ea = f['ea']
+                if ea < sa:
+                    ea += 2 * math.pi
+                sweep = ea - sa
+                L = f['r'] * sweep
+                
+                chained_segs.append({
+                    'type': 'Curve (Arc & Radius)', 
+                    'Shape Type': 'Curve (Arc & Radius)', 
+                    'L': L, 
+                    'Radius (R) (m)': f['r'],
+                    'Curvature Direction': "Arching Up ⤴ (Concave)",
+                    'start_angle': math.degrees(sa + math.pi/2), 
+                    'smooth': False, 
+                    'is_dxf': True, 
+                    'abs_c': f['c'], 
+                    'abs_r': f['r'],
+                    'abs_sa': sa, 
+                    'abs_ea': ea, 
+                    'sweep': sweep, 
+                    'kappa': 1.0/f['r']
+                })
+
+        struts_mapped = []
+        for s in raw_struts:
+            p1 = s['p1']
+            p2 = s['p2']
+            if p1[1] > p2[1]:
+                top_p = p1
+                bot_p = p2
+            else:
+                top_p = p2
+                bot_p = p1
+                
+            d_top, b_seg, b_s = get_closest_segment_exact(top_p, chained_segs)
+            struts_mapped.append({
+                'seg_idx': b_seg, 
+                'dist': b_s, 
+                'gx': bot_p[0], 
+                'gy': bot_p[1]
+            })
+
+        supps_mapped = []
+        for sp in raw_supports:
+            d_min, b_seg, b_s = get_closest_segment_exact((sp['x'], sp['y']), chained_segs)
+            if d_min < 0.1:
+                supps_mapped.append({'x': sp['x'], 'y': sp['y'], 'type': 'Hinged', 'seg_idx': b_seg, 's_dist': b_s})
+            else:
+                supps_mapped.append({'x': sp['x'], 'y': sp['y'], 'type': 'Hinged'})
+
+        return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped}
+        
+    except Exception as e:
+        st.error(f"⚠️ حدث خطأ أثناء تحليل ملف الـ DXF. تأكد من أن الملف سليم: {e}")
+        return None
+    finally:
+        if tmp_path and os.path.exists(tmp_path):
+            try:
+                os.remove(tmp_path)
+            except:
+                pass
 
 # =========================================================
-# 2. Advanced CAD Auto-Mesh Builder
+# 2. Geometry & Mesh Generators (Absolute Eval Engine)
 # =========================================================
-def build_cad_mesh(cad_lines, supports, struts, loads, overrides, combo):
+def eval_seg_point(seg, s_val, start_data=None):
+    L = seg.get('L', 0.0)
+    s_val = min(max(s_val, 0.0), L)
+    
+    if L > 1e-6:
+        ratio = s_val / L
+    else:
+        ratio = 0.0
+    
+    is_dxf = seg.get('is_dxf', False)
+    shape_type = seg.get('Shape Type', 'Straight Line')
+    
+    if is_dxf:
+        if shape_type == 'Straight Line' and 'abs_p1' in seg:
+            p1 = seg['abs_p1']
+            p2 = seg['abs_p2']
+            px = p1[0] + ratio * (p2[0] - p1[0])
+            py = p1[1] + ratio * (p2[1] - p1[1])
+            dx = p2[0] - p1[0]
+            dy = p2[1] - p1[1]
+            th = math.atan2(dy, dx)
+            return px, py, th
+            
+        elif shape_type == 'Curve (Arc & Radius)' and 'abs_c' in seg:
+            c = seg['abs_c']
+            r = seg['abs_r']
+            current_ang = seg['abs_sa'] + ratio * seg.get('sweep', 0)
+            px = c[0] + r * math.cos(current_ang)
+            py = c[1] + r * math.sin(current_ang)
+            th = current_ang + math.pi/2
+            return px, py, th
+            
+    if start_data:
+        x0 = start_data.get('x0', 0)
+        y0 = start_data.get('y0', 0)
+        th0 = start_data.get('th0', 0)
+        kappa = start_data.get('kappa', 0)
+        
+        if abs(kappa) < 1e-6: 
+            x = x0 + s_val * math.cos(th0)
+            y = y0 + s_val * math.sin(th0)
+            th = th0
+        else: 
+            x = x0 + (math.sin(th0 + kappa * s_val) - math.sin(th0)) / kappa
+            y = y0 - (math.cos(th0 + kappa * s_val) - math.cos(th0)) / kappa
+            th = th0 + kappa * s_val
+            
+        return x, y, th
+    
+    return 0.0, 0.0, 0.0
+
+def get_approx_xy(segs, s_idx, s_val):
+    if s_idx < 0 or s_idx >= len(segs):
+        return 0.0, 0.0
+        
+    seg = segs[s_idx]
+    if seg.get('is_dxf'):
+        px, py, _ = eval_seg_point(seg, s_val)
+        return px, py
+        
+    curr_x = 0.0
+    curr_y = 0.0
+    curr_th = 0.0
+    
+    for i in range(s_idx + 1):
+        sg = segs[i]
+        
+        if i == 0 or not sg.get('smooth', True):
+            curr_th = math.radians(sg.get('start_angle', 0.0))
+            
+        L = sg.get('L', 0.0)
+        kappa = sg.get('kappa', 0.0)
+        
+        if i == s_idx:
+            if abs(kappa) < 1e-6:
+                x_val = curr_x + s_val * math.cos(curr_th)
+                y_val = curr_y + s_val * math.sin(curr_th)
+                return x_val, y_val
+            else:
+                x_val = curr_x + (math.sin(curr_th + kappa*s_val) - math.sin(curr_th))/kappa
+                y_val = curr_y - (math.cos(curr_th + kappa*s_val) - math.cos(curr_th))/kappa
+                return x_val, y_val
+                
+        if abs(kappa) < 1e-6:
+            curr_x += L * math.cos(curr_th)
+            curr_y += L * math.sin(curr_th)
+        else:
+            curr_x += (math.sin(curr_th + kappa*L) - math.sin(curr_th))/kappa
+            curr_y -= (math.cos(curr_th + kappa*L) - math.cos(curr_th))/kappa
+            curr_th += kappa * L
+            
+    return curr_x, curr_y
+
+def build_chain_mesh(segments, seg_sections, loads, struts, base_sec, supports, corner_sup, mesh_size=0.25):
+    nodes = []
+    elements = []
+    nodal_loads = []
+    
+    node_tol = 1e-4 
+    
+    def get_or_add_node(x, y):
+        for i, n in enumerate(nodes):
+            if abs(n[0] - x) < node_tol and abs(n[1] - y) < node_tol:
+                return i
+        nodes.append([x, y])
+        return len(nodes) - 1
+
+    seg_start_data = [] 
+    curr_x = 0.0
+    curr_y = 0.0
+    curr_th = np.radians(corner_sup.get('angle', 0.0)) 
+    
+    key_nodes = set()
+    
+    for i, seg in enumerate(segments):
+        if not seg.get('is_dxf'):
+            if i == 0 or not seg.get('smooth', True):
+                curr_th = np.radians(seg.get('start_angle', 0.0))
+            
+        L = seg.get('L', 0.0)
+        kappa = seg.get('kappa', 0.0)
+        seg_start_data.append({'x0': curr_x, 'y0': curr_y, 'th0': curr_th, 'kappa': kappa})
+        
+        key_s_vals = [0.0, L]
+        for st_item in struts:
+            if st_item.get('seg_idx') == i:
+                key_s_vals.append(st_item['s_dist'])
+                
+        for ld in loads:
+            if ld.get('seg_idx') == i:
+                key_s_vals.append(ld['start'])
+                key_s_vals.append(ld['end'])
+                
+        for sp in supports:
+            if sp.get('seg_idx') == i:
+                key_s_vals.append(sp['s_dist'])
+            
+        keys = list(key_s_vals)
+        num_sub = max(1, int(np.ceil(L / mesh_size)))
+        
+        for p in np.linspace(0, L, num_sub+1):
+            keys.append(p)
+            
+        keys = sorted(list(set([min(max(round(k, 5), 0.0), round(L, 5)) for k in keys])))
+        
+        node_indices = []
+        for s_val in keys:
+            px, py, _ = eval_seg_point(seg, s_val, seg_start_data[i])
+            nid = get_or_add_node(px, py)
+            node_indices.append(nid)
+            
+            if any(abs(s_val - kv) < 1e-4 for kv in key_s_vals):
+                key_nodes.add(nid)
+            
+        sec_props = seg_sections[i]
+        
+        for j in range(len(keys)-1):
+            n1 = node_indices[j]
+            n2 = node_indices[j+1]
+            
+            if n1 == n2:
+                continue 
+                
+            s_mid = (keys[j] + keys[j+1]) / 2.0
+            _, _, th_mid = eval_seg_point(seg, s_mid, seg_start_data[i])
+            c_t = np.cos(th_mid)
+            s_t = np.sin(th_mid)
+            
+            p_x1 = 0.0
+            p_y1 = 0.0
+            p_x2 = 0.0
+            p_y2 = 0.0
+            
+            for ld in loads:
+                if ld.get('seg_idx') == i and ld.get('type') != 'Point Load':
+                    if ld['start'] - 1e-4 <= s_mid <= ld['end'] + 1e-4:
+                        L_ld = max(ld['end'] - ld['start'], 1e-5)
+                        
+                        wa = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j] - ld['start']) / L_ld
+                        wb = ld['w1'] + (ld['w2'] - ld['w1']) * (keys[j+1] - ld['start']) / L_ld
+                        
+                        dir_str = ld.get('dir', '')
+                        if 'Global Z' in dir_str or 'Global Y' in dir_str:
+                            p_x1 += wa * s_t
+                            p_y1 += wa * c_t
+                            p_x2 += wb * s_t
+                            p_y2 += wb * c_t
+                        elif 'Global X' in dir_str:
+                            p_x1 += wa * c_t
+                            p_y1 -= wa * s_t
+                            p_x2 += wb * c_t
+                            p_y2 -= wb * s_t
+                        else:
+                            p_x1 += 0.0
+                            p_y1 += wa
+                            p_x2 += 0.0
+                            p_y2 += wb
+                            
+            elements.append({
+                'type': 'frame', 
+                'group': 'segment', 
+                'sec': sec_props['name'],
+                'n1': n1, 
+                'n2': n2, 
+                'px1': p_x1, 
+                'py1': p_y1, 
+                'px2': p_x2, 
+                'py2': p_y2,
+                'E': sec_props['E'] * 10000.0, 
+                'A': sec_props['A'], 
+                'I': sec_props['I'] / 100000000.0,
+                'seg_idx': i, 
+                's_start': keys[j], 
+                's_end': keys[j+1], 
+                'L': keys[j+1] - keys[j],
+                'th_mid': th_mid
+            })
+            
+        for ld in loads:
+            if ld.get('seg_idx') == i and ld.get('type') == 'Point Load':
+                try:
+                    idx = keys.index(round(ld['start'], 5))
+                    nid = node_indices[idx]
+                    dir_str = ld.get('dir', '')
+                    
+                    if 'Global Z' in dir_str or 'Global Y' in dir_str:
+                        nodal_loads.append({'node': nid, 'Fx': 0.0, 'Fy': ld['w1']})
+                    elif 'Global X' in dir_str:
+                        nodal_loads.append({'node': nid, 'Fx': ld['w1'], 'Fy': 0.0})
+                    else: 
+                        _, _, th_pt = eval_seg_point(seg, ld['start'], seg_start_data[i])
+                        c_pt = np.cos(th_pt)
+                        s_pt = np.sin(th_pt)
+                        nodal_loads.append({'node': nid, 'Fx': -ld['w1']*s_pt, 'Fy': ld['w1']*c_pt})
+                except ValueError:
+                    pass
+                
+        curr_x, curr_y, curr_th = eval_seg_point(seg, L, seg_start_data[i])
+
+    for st_idx, st_item in enumerate(struts):
+        seg_idx = st_item.get('seg_idx', 0)
+        dist = round(st_item.get('s_dist', 0.0), 5)
+        gx = st_item.get('gx', 0.0)
+        gy = st_item.get('gy', 0.0)
+        
+        nx, ny, _ = eval_seg_point(segments[seg_idx], dist, seg_start_data[seg_idx])
+        
+        top_node = get_or_add_node(nx, ny)
+        bot_node = get_or_add_node(gx, gy)
+        
+        elements.append({
+            'type': 'truss', 
+            'group': 'strut', 
+            'sec': st_item.get('sec', 'Unknown'),
+            'n1': bot_node, 
+            'n2': top_node, 
+            'strut_idx': st_idx,
+            'E': 21000000.0, 
+            'A': 0.001
+        })
+
+    supports_list = []
+    for sup in supports:
+        if 'seg_idx' in sup:
+            s_dist = round(sup['s_dist'], 5)
+            nx, ny, _ = eval_seg_point(segments[sup['seg_idx']], s_dist, seg_start_data[sup['seg_idx']])
+            nid = get_or_add_node(nx, ny)
+        else:
+            nid = get_or_add_node(sup.get('x', 0.0), sup.get('y', 0.0))
+            
+        supports_list.append({
+            'node': nid, 
+            'type': sup.get('type', 'Hinged'), 
+            'angle': 0.0
+        })
+        
+    display_nodes = set([s['node'] for s in supports_list])
+    display_nodes.update(key_nodes) 
+
+    return nodes, elements, nodal_loads, display_nodes, supports_list, seg_start_data
+
+# =========================================================
+# V4 AUTO-MESH ENGINE (For Interactive CAD Output)
+# =========================================================
+def build_cad_mesh(cad_payload):
+    cad_lines = cad_payload.get('cad_lines', [])
+    supports = cad_payload.get('supports', [])
+    struts = cad_payload.get('struts', [])
+    loads = cad_payload.get('loads', [])
+    overrides = cad_payload.get('overrides', {})
+    combo = cad_payload.get('combo', {'D': 1.0, 'L': 0.0, 'W': 0.0})
+    
     nodes = []
     elements = []
     nodal_loads = []
@@ -156,27 +728,28 @@ def build_cad_mesh(cad_lines, supports, struts, loads, overrides, combo):
         nodes.append([x, y])
         return len(nodes) - 1
 
-    # استخراج نقاط التقاطع (Auto-Mesh Nodes)
     cut_points = []
     for sp in supports:
         cut_points.append((sp['x']/100, -sp['y']/100))
         
-    for st_c in struts:
-        cut_points.append((st_c['gx']/100, -st_c['gy']/100))
-        cut_points.append((st_c['top_x']/100, -st_c['top_y']/100))
+    for st in struts:
+        cut_points.append((st['gx']/100, -st['gy']/100))
+        cut_points.append((st['top_x']/100, -st['top_y']/100))
 
     meshed_frames = []
-    # تقطيع الفريمات عند كل دعامة أو ناهز
     for line in cad_lines:
-        x1, y1 = line['x1']/100, -line['y1']/100
-        x2, y2 = line['x2']/100, -line['y2']/100
-        pts_on_line = [(x1, y1), (x2, y2)]
+        x1 = line['x1']/100
+        y1 = -line['y1']/100
+        x2 = line['x2']/100
+        y2 = -line['y2']/100
         
+        pts_on_line = [(x1, y1), (x2, y2)]
         for cp in cut_points:
             if point_on_line(cp[0], cp[1], x1, y1, x2, y2):
                 pts_on_line.append((cp[0], cp[1]))
                 
         pts_on_line.sort(key=lambda p: math.hypot(p[0]-x1, p[1]-y1))
+        
         unique_pts = []
         for p in pts_on_line:
             if not unique_pts or math.hypot(p[0]-unique_pts[-1][0], p[1]-unique_pts[-1][1]) > 1e-4:
@@ -185,8 +758,11 @@ def build_cad_mesh(cad_lines, supports, struts, loads, overrides, combo):
         for i in range(len(unique_pts)-1):
             meshed_frames.append({
                 'id': line['id'], 
-                'x1': unique_pts[i][0], 'y1': unique_pts[i][1],
-                'x2': unique_pts[i+1][0], 'y2': unique_pts[i+1][1]
+                'curve_id': line.get('curve_id'),
+                'x1': unique_pts[i][0], 
+                'y1': unique_pts[i][1],
+                'x2': unique_pts[i+1][0], 
+                'y2': unique_pts[i+1][1]
             })
 
     seg_sections = []
@@ -202,46 +778,65 @@ def build_cad_mesh(cad_lines, supports, struts, loads, overrides, combo):
             
             elements.append({
                 'id': m_line['id'], 
-                'type': 'frame', 'group': 'segment',
-                'n1': n1, 'n2': n2, 
-                'E': sec.get('E', 2100.0)*10000, 'A': sec.get('A', 0.0034), 'I': sec.get('I', 0.0000041), 
-                'c': (nodes[n2][0]-nodes[n1][0])/L, 's': (nodes[n2][1]-nodes[n1][1])/L, 'L': L, 
-                'px1': 0.0, 'py1': 0.0, 'px2': 0.0, 'py2': 0.0
+                'curve_id': m_line.get('curve_id'), 
+                'type': 'frame', 
+                'group': 'segment',
+                'n1': n1, 
+                'n2': n2, 
+                'E': sec.get('E', 2100.0)*10000, 
+                'A': sec.get('A', 0.0034), 
+                'I': sec.get('I', 0.0000041), 
+                'c': (nodes[n2][0]-nodes[n1][0])/L, 
+                's': (nodes[n2][1]-nodes[n1][1])/L, 
+                'L': L, 
+                'px1': 0.0, 
+                'py1': 0.0, 
+                'px2': 0.0, 
+                'py2': 0.0
             })
 
-    for st_c in struts:
-        n1 = get_or_add_node(st_c['gx']/100, -st_c['gy']/100)
-        n2 = get_or_add_node(st_c['top_x']/100, -st_c['top_y']/100)
-        sec_name = overrides.get(st_c['id'], {}).get('sec', "PPH 353 (1.5:3.5m)")
-        prop = STRUTS_DB.get(sec_name, {"allow": 50.0})
+    for st in struts:
+        n1 = get_or_add_node(st['gx']/100, -st['gy']/100)
+        n2 = get_or_add_node(st['top_x']/100, -st['top_y']/100)
+        sec_name = overrides.get(st['id'], {}).get('sec', "PPH 353")
         
         elements.append({
-            'id': st_c['id'], 
-            'type': 'truss', 'group': 'strut', 'sec': sec_name, 
-            'n1': n1, 'n2': n2, 
-            'E': 21000000.0, 'A': 0.002, 'allow': prop.get('allow', 50.0)
+            'id': st['id'], 
+            'type': 'truss', 
+            'group': 'strut', 
+            'sec': sec_name, 
+            'n1': n1, 
+            'n2': n2, 
+            'E': 21000000.0, 
+            'A': 0.002
         })
 
     for sp in supports:
         node_idx = get_or_add_node(sp['x']/100, -sp['y']/100)
         sup_type = overrides.get(sp['id'], {}).get('type', 'Hinged')
         sup_ang = float(overrides.get(sp['id'], {}).get('angle', 0.0))
-        supports_list.append({'node': node_idx, 'type': sup_type, 'angle': sup_ang})
+        
+        supports_list.append({
+            'node': node_idx, 
+            'type': sup_type, 
+            'angle': sup_ang
+        })
         display_nodes.add(node_idx)
 
     for ld in loads:
-        factored_w1 = float(ld['w1']) * combo.get(ld.get('category', 'D'), 1.0)
-        factored_w2 = float(ld.get('w2', ld['w1'])) * combo.get(ld.get('category', 'D'), 1.0)
+        factored_w1 = float(ld['w1']) * combo.get(ld.get('case', 'D'), 1.0)
+        factored_w2 = float(ld.get('w2', ld['w1'])) * combo.get(ld.get('case', 'D'), 1.0)
         
-        if factored_w1 == 0 and factored_w2 == 0: continue
+        if factored_w1 == 0 and factored_w2 == 0:
+            continue
         
         for el in elements:
-            if el['type'] == 'frame' and (ld['target'] == 'All Segments' or el['id'] in ld['target']):
-                dir_str = ld.get('dir', 'Global Z (Vertical ↓)')
-                if 'Global Z' in dir_str or 'Global Y' in dir_str:
+            if el['type'] == 'frame' and (ld['target'] == 'all' or el['id'] in ld['target'] or el.get('curve_id') in ld['target']):
+                dir_str = ld.get('dir', 'Vertical')
+                if 'Vertical' in dir_str:
                     el['py1'] -= factored_w1
                     el['py2'] -= factored_w2 
-                elif 'Global X' in dir_str:
+                elif 'Horizontal' in dir_str:
                     el['px1'] += factored_w1
                     el['px2'] += factored_w2
                 else:
@@ -251,154 +846,6 @@ def build_cad_mesh(cad_lines, supports, struts, loads, overrides, combo):
                     el['py2'] += el['c']*factored_w2
 
     return nodes, elements, nodal_loads, display_nodes, supports_list, seg_sections
-
-# =========================================================
-# 3. Advanced FEA Solver (Exact Matrix Engine)
-# =========================================================
-def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
-    NDOF = len(nodes) * 3
-    K = np.zeros((NDOF, NDOF))
-    F = np.zeros(NDOF)
-    
-    for el in elements:
-        n1 = el['n1']
-        n2 = el['n2']
-        x1 = nodes[n1][0]
-        y1 = nodes[n1][1]
-        x2 = nodes[n2][0]
-        y2 = nodes[n2][1]
-        
-        L = np.hypot(x2 - x1, y2 - y1)
-        if L < 1e-5: 
-            el['c'], el['s'], el['L'] = 1, 0, 1e-5
-            el['internal'] = {'N': [0,0], 'V': [0,0], 'M': [0,0], 'x': [0, 1e-5], 'v_rel': [0,0]}
-            continue
-            
-        c = (x2 - x1) / L
-        s = (y2 - y1) / L
-        el['L'], el['c'], el['s'] = L, c, s
-        
-        E, A, I = el['E'], el['A'], el.get('I', 0.00005)
-        T = np.array([
-            [c, s, 0, 0, 0, 0], [-s, c, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0],
-            [0, 0, 0, c, s, 0], [0, 0, 0, -s, c, 0], [0, 0, 0, 0, 0, 1]
-        ])
-        
-        if el['type'] == 'truss':
-            k_loc = np.zeros((6, 6))
-            k_loc[0,0] = E*A/L; k_loc[3,3] = E*A/L
-            k_loc[0,3] = -E*A/L; k_loc[3,0] = -E*A/L
-        else:
-            k_loc = np.array([
-                [E*A/L, 0, 0, -E*A/L, 0, 0], 
-                [0, 12*E*I/L**3, 6*E*I/L**2, 0, -12*E*I/L**3, 6*E*I/L**2],
-                [0, 6*E*I/L**2, 4*E*I/L, 0, -6*E*I/L**2, 2*E*I/L], 
-                [-E*A/L, 0, 0, E*A/L, 0, 0],
-                [0, -12*E*I/L**3, -6*E*I/L**2, 0, 12*E*I/L**3, -6*E*I/L**2], 
-                [0, 6*E*I/L**2, 2*E*I/L, 0, -6*E*I/L**2, 4*E*I/L]
-            ])
-            
-            px1, py1 = el.get('px1',0), el.get('py1',0)
-            px2, py2 = el.get('px2',0), el.get('py2',0)
-            
-            f_loc = np.array([
-                (2*px1 + px2)*L/6.0, (7*py1 + 3*py2)*L/20.0, (3*py1 + 2*py2)*L**2/60.0,
-                (px1 + 2*px2)*L/6.0, (3*py1 + 7*py2)*L/20.0, -(2*py1 + 3*py2)*L**2/60.0
-            ])
-            f_glob = T.T @ f_loc
-            dof = [3*n1, 3*n1+1, 3*n1+2, 3*n2, 3*n2+1, 3*n2+2]
-            for r in range(6): F[dof[r]] += f_glob[r]
-            
-        k_glob = T.T @ k_loc @ T
-        dof = [3*n1, 3*n1+1, 3*n1+2, 3*n2, 3*n2+1, 3*n2+2]
-        for r in range(6):
-            for col in range(6): K[dof[r], dof[col]] += k_glob[r, col]
-                
-    for nl in nodal_loads:
-        F[3*nl['node']] += nl['Fx']
-        F[3*nl['node']+1] += nl['Fy']
-            
-    K_orig = K.copy()
-    fixed_dofs = []
-    K_pen = 1e12
-    
-    for sup in supports_list:
-        n = sup['node']
-        t = sup['type']
-        a = sup.get('angle', 0.0)
-        
-        if t == 'Fixed': fixed_dofs.extend([3*n, 3*n+1, 3*n+2])
-        elif t == 'Hinged': fixed_dofs.extend([3*n, 3*n+1])
-        elif t == 'Roller':
-            rad = np.radians(a)
-            nx, ny = -np.sin(rad), np.cos(rad) 
-            K[3*n, 3*n] += K_pen*nx**2; K[3*n+1, 3*n+1] += K_pen*ny**2
-            K[3*n, 3*n+1] += K_pen*nx*ny; K[3*n+1, 3*n] += K_pen*nx*ny
-
-    free_dof = [i for i in range(NDOF) if i not in fixed_dofs]
-    K_ff = K[np.ix_(free_dof, free_dof)]
-    F_f = F[free_dof]
-    
-    U = np.zeros(NDOF)
-    try: U[free_dof] = np.linalg.solve(K_ff, F_f)
-    except np.linalg.LinAlgError: U[free_dof] = np.linalg.lstsq(K_ff, F_f, rcond=None)[0]
-    
-    R_reactions = K_orig @ U - F 
-    
-    for el in elements:
-        if el.get('L', 0) < 1e-5: continue
-            
-        n1 = el['n1']
-        n2 = el['n2']
-        c, s, L = el['c'], el['s'], el['L']
-        E, A, I = el['E'], el['A'], el.get('I', 0.00005)
-        
-        u_glob = U[[3*n1, 3*n1+1, 3*n1+2, 3*n2, 3*n2+1, 3*n2+2]]
-        T = np.array([
-            [c, s, 0, 0, 0, 0], [-s, c, 0, 0, 0, 0], [0, 0, 1, 0, 0, 0],
-            [0, 0, 0, c, s, 0], [0, 0, 0, -s, c, 0], [0, 0, 0, 0, 0, 1]
-        ])
-        u_loc = T @ u_glob
-        el['internal'] = {'u_loc': u_loc}
-        
-        if el['type'] == 'truss':
-            N_val = (E * A / L) * (u_loc[3] - u_loc[0])
-            xs = np.linspace(0, L, 51)
-            el['internal'].update({
-                'N': np.full_like(xs, N_val), 'V': np.zeros_like(xs), 'M': np.zeros_like(xs),
-                'x': xs, 'v_rel': np.zeros_like(xs)
-            })
-        else:
-            k_loc = np.array([
-                [E*A/L, 0, 0, -E*A/L, 0, 0], [0, 12*E*I/L**3, 6*E*I/L**2, 0, -12*E*I/L**3, 6*E*I/L**2],
-                [0, 6*E*I/L**2, 4*E*I/L, 0, -6*E*I/L**2, 2*E*I/L], [-E*A/L, 0, 0, E*A/L, 0, 0],
-                [0, -12*E*I/L**3, -6*E*I/L**2, 0, 12*E*I/L**3, -6*E*I/L**2], [0, 6*E*I/L**2, 2*E*I/L, 0, -6*E*I/L**2, 4*E*I/L]
-            ])
-            px1, py1 = el.get('px1',0), el.get('py1',0)
-            px2, py2 = el.get('px2',0), el.get('py2',0)
-            
-            f_loc = np.array([
-                (2*px1 + px2)*L/6.0, (7*py1 + 3*py2)*L/20.0, (3*py1 + 2*py2)*L**2/60.0,
-                (px1 + 2*px2)*L/6.0, (3*py1 + 7*py2)*L/20.0, -(2*py1 + 3*py2)*L**2/60.0
-            ])
-            f_end = k_loc @ u_loc - f_loc
-            
-            xs = np.linspace(0, L, 51) 
-            N_arr, V_arr, M_arr, v_rel_arr = np.zeros_like(xs), np.zeros_like(xs), np.zeros_like(xs), np.zeros_like(xs)
-            v1, theta1, v2, theta2 = u_loc[1], u_loc[2], u_loc[4], u_loc[5]
-            
-            for i, x in enumerate(xs):
-                N_arr[i] = -f_end[0] - (px1*x + (px2-px1)*x**2/(2*L))
-                V_arr[i] = f_end[1] + (py1*x + (py2-py1)*x**2/(2*L))
-                M_arr[i] = -f_end[2] + f_end[1]*x + py1*x**2/2.0 + (py2-py1)*x**3/(6*L)
-                xi = x / L
-                v_shape = v1*(1-3*xi**2+2*xi**3) + theta1*(x*(1-xi)**2) + v2*(3*xi**2-2*xi**3) + theta2*(x*(xi**2-xi))
-                v_chord = v1 + xi * (v2 - v1) 
-                v_rel_arr[i] = v_shape - v_chord 
-                
-            el['internal'].update({'N': N_arr, 'V': V_arr, 'M': M_arr, 'x': xs, 'v_rel': v_rel_arr})
-            
-    return U, R_reactions
     # =========================================================
 # 💡 EXPORT FROM INTERACTIVE TO CLASSIC ENGINE
 # =========================================================
@@ -417,6 +864,7 @@ def export_cad_to_classic(cad_payload):
         cut_points.append((st['top_x']/100, -st['top_y']/100))
 
     meshed_frames = []
+    
     for line in cad_lines:
         x1 = line['x1']/100
         y1 = -line['y1']/100
@@ -445,6 +893,7 @@ def export_cad_to_classic(cad_payload):
             })
             
     chained_segs = []
+    
     for m in meshed_frames:
         dx = m['x2'] - m['x1']
         dy = m['y2'] - m['y1']
@@ -464,6 +913,7 @@ def export_cad_to_classic(cad_payload):
         })
         
     struts_mapped = []
+    
     for st in struts:
         top_p = (st['top_x']/100, -st['top_y']/100)
         bot_p = (st['gx']/100, -st['gy']/100)
@@ -478,6 +928,7 @@ def export_cad_to_classic(cad_payload):
         })
         
     supps_mapped = []
+    
     for sp in supports:
         sp_p = (sp['x']/100, -sp['y']/100)
         d_min, b_seg, b_s = get_closest_segment_exact(sp_p, chained_segs)
@@ -498,6 +949,230 @@ def export_cad_to_classic(cad_payload):
             })
             
     return {'segments': chained_segs, 'struts': struts_mapped, 'supports': supps_mapped}
+
+# =========================================================
+# 3. Advanced FEA Solver (Exact Matrix Engine)
+# =========================================================
+def solve_fea_engine(nodes, elements, nodal_loads, supports_list):
+    NDOF = len(nodes) * 3
+    K = np.zeros((NDOF, NDOF))
+    F = np.zeros(NDOF)
+    
+    for el in elements:
+        n1 = el['n1']
+        n2 = el['n2']
+        x1 = nodes[n1][0]
+        y1 = nodes[n1][1]
+        x2 = nodes[n2][0]
+        y2 = nodes[n2][1]
+        
+        L = np.hypot(x2 - x1, y2 - y1)
+        
+        if L < 1e-5: 
+            el['c'] = 1
+            el['s'] = 0
+            el['L'] = 1e-5
+            el['internal'] = {
+                'N': [0,0], 
+                'V': [0,0], 
+                'M': [0,0], 
+                'x': [0, 1e-5], 
+                'v_rel': [0,0]
+            }
+            continue
+            
+        c = (x2 - x1) / L
+        s = (y2 - y1) / L
+        el['L'] = L
+        el['c'] = c
+        el['s'] = s
+        
+        E = el['E']
+        A = el['A']
+        I = el.get('I', 0.00005)
+        
+        T = np.array([
+            [c, s, 0, 0, 0, 0], 
+            [-s, c, 0, 0, 0, 0], 
+            [0, 0, 1, 0, 0, 0],
+            [0, 0, 0, c, s, 0], 
+            [0, 0, 0, -s, c, 0], 
+            [0, 0, 0, 0, 0, 1]
+        ])
+        
+        if el['type'] == 'truss':
+            k_loc = np.zeros((6, 6))
+            k_loc[0,0] = E * A / L
+            k_loc[3,3] = E * A / L
+            k_loc[0,3] = -E * A / L
+            k_loc[3,0] = -E * A / L
+        else:
+            k_loc = np.array([
+                [E*A/L, 0, 0, -E*A/L, 0, 0], 
+                [0, 12*E*I/L**3, 6*E*I/L**2, 0, -12*E*I/L**3, 6*E*I/L**2],
+                [0, 6*E*I/L**2, 4*E*I/L, 0, -6*E*I/L**2, 2*E*I/L], 
+                [-E*A/L, 0, 0, E*A/L, 0, 0],
+                [0, -12*E*I/L**3, -6*E*I/L**2, 0, 12*E*I/L**3, -6*E*I/L**2], 
+                [0, 6*E*I/L**2, 2*E*I/L, 0, -6*E*I/L**2, 4*E*I/L]
+            ])
+            
+            px1 = el.get('px1',0)
+            py1 = el.get('py1',0)
+            px2 = el.get('px2',0)
+            py2 = el.get('py2',0)
+            
+            f_loc = np.array([
+                (2*px1 + px2)*L/6.0, 
+                (7*py1 + 3*py2)*L/20.0, 
+                (3*py1 + 2*py2)*L**2/60.0,
+                (px1 + 2*px2)*L/6.0, 
+                (3*py1 + 7*py2)*L/20.0, 
+                -(2*py1 + 3*py2)*L**2/60.0
+            ])
+            
+            f_glob = T.T @ f_loc
+            dof = [3*n1, 3*n1+1, 3*n1+2, 3*n2, 3*n2+1, 3*n2+2]
+            
+            for r in range(6): 
+                F[dof[r]] += f_glob[r]
+            
+        k_glob = T.T @ k_loc @ T
+        dof = [3*n1, 3*n1+1, 3*n1+2, 3*n2, 3*n2+1, 3*n2+2]
+        
+        for r in range(6):
+            for col in range(6): 
+                K[dof[r], dof[col]] += k_glob[r, col]
+                
+    for nl in nodal_loads:
+        F[3*nl['node']] += nl['Fx']
+        F[3*nl['node']+1] += nl['Fy']
+            
+    K_orig = K.copy()
+    fixed_dofs = []
+    K_pen = 1e12
+    
+    for sup in supports_list:
+        n = sup['node']
+        t = sup['type']
+        a = sup.get('angle', 0.0)
+        
+        if t == 'Fixed': 
+            fixed_dofs.extend([3*n, 3*n+1, 3*n+2])
+        elif t == 'Hinged': 
+            fixed_dofs.extend([3*n, 3*n+1])
+        elif t == 'Roller':
+            rad = np.radians(a)
+            nx = -np.sin(rad)
+            ny = np.cos(rad) 
+            K[3*n, 3*n] += K_pen*nx**2
+            K[3*n+1, 3*n+1] += K_pen*ny**2
+            K[3*n, 3*n+1] += K_pen*nx*ny
+            K[3*n+1, 3*n] += K_pen*nx*ny
+
+    free_dof = [i for i in range(NDOF) if i not in fixed_dofs]
+    K_ff = K[np.ix_(free_dof, free_dof)]
+    F_f = F[free_dof]
+    
+    U = np.zeros(NDOF)
+    try: 
+        U[free_dof] = np.linalg.solve(K_ff, F_f)
+    except np.linalg.LinAlgError: 
+        U[free_dof] = np.linalg.lstsq(K_ff, F_f, rcond=None)[0]
+    
+    R_reactions = K_orig @ U - F 
+    
+    for el in elements:
+        if el.get('L', 0) < 1e-5: 
+            continue
+            
+        n1 = el['n1']
+        n2 = el['n2']
+        c = el['c']
+        s = el['s']
+        L = el['L']
+        E = el['E']
+        A = el['A']
+        I = el.get('I', 0.00005)
+        
+        u_glob = U[[3*n1, 3*n1+1, 3*n1+2, 3*n2, 3*n2+1, 3*n2+2]]
+        T = np.array([
+            [c, s, 0, 0, 0, 0], 
+            [-s, c, 0, 0, 0, 0], 
+            [0, 0, 1, 0, 0, 0],
+            [0, 0, 0, c, s, 0], 
+            [0, 0, 0, -s, c, 0], 
+            [0, 0, 0, 0, 0, 1]
+        ])
+        
+        u_loc = T @ u_glob
+        el['internal'] = {'u_loc': u_loc}
+        
+        if el['type'] == 'truss':
+            N_val = (E * A / L) * (u_loc[3] - u_loc[0])
+            xs = np.linspace(0, L, 51)
+            el['internal'].update({
+                'N': np.full_like(xs, N_val), 
+                'V': np.zeros_like(xs), 
+                'M': np.zeros_like(xs),
+                'x': xs, 
+                'v_rel': np.zeros_like(xs)
+            })
+        else:
+            k_loc = np.array([
+                [E*A/L, 0, 0, -E*A/L, 0, 0], 
+                [0, 12*E*I/L**3, 6*E*I/L**2, 0, -12*E*I/L**3, 6*E*I/L**2],
+                [0, 6*E*I/L**2, 4*E*I/L, 0, -6*E*I/L**2, 2*E*I/L], 
+                [-E*A/L, 0, 0, E*A/L, 0, 0],
+                [0, -12*E*I/L**3, -6*E*I/L**2, 0, 12*E*I/L**3, -6*E*I/L**2], 
+                [0, 6*E*I/L**2, 2*E*I/L, 0, -6*E*I/L**2, 4*E*I/L]
+            ])
+            
+            px1 = el.get('px1',0)
+            py1 = el.get('py1',0)
+            px2 = el.get('px2',0)
+            py2 = el.get('py2',0)
+            
+            f_loc = np.array([
+                (2*px1 + px2)*L/6.0, 
+                (7*py1 + 3*py2)*L/20.0, 
+                (3*py1 + 2*py2)*L**2/60.0,
+                (px1 + 2*px2)*L/6.0, 
+                (3*py1 + 7*py2)*L/20.0, 
+                -(2*py1 + 3*py2)*L**2/60.0
+            ])
+            
+            f_end = k_loc @ u_loc - f_loc
+            
+            xs = np.linspace(0, L, 51) 
+            N_arr = np.zeros_like(xs)
+            V_arr = np.zeros_like(xs)
+            M_arr = np.zeros_like(xs)
+            v_rel_arr = np.zeros_like(xs)
+            
+            v1 = u_loc[1]
+            theta1 = u_loc[2]
+            v2 = u_loc[4]
+            theta2 = u_loc[5]
+            
+            for i, x in enumerate(xs):
+                N_arr[i] = -f_end[0] - (px1*x + (px2-px1)*x**2/(2*L))
+                V_arr[i] = f_end[1] + (py1*x + (py2-py1)*x**2/(2*L))
+                M_arr[i] = -f_end[2] + f_end[1]*x + py1*x**2/2.0 + (py2-py1)*x**3/(6*L)
+                
+                xi = x / L
+                v_shape = v1*(1-3*xi**2+2*xi**3) + theta1*(x*(1-xi)**2) + v2*(3*xi**2-2*xi**3) + theta2*(x*(xi**2-xi))
+                v_chord = v1 + xi * (v2 - v1) 
+                v_rel_arr[i] = v_shape - v_chord 
+                
+            el['internal'].update({
+                'N': N_arr, 
+                'V': V_arr, 
+                'M': M_arr, 
+                'x': xs, 
+                'v_rel': v_rel_arr
+            })
+            
+    return U, R_reactions
 
 # =========================================================
 # 4. Plotting Engine (Live Preview & SAP2000 Colors)
@@ -874,8 +1549,7 @@ def generate_chain_report(sys_data):
     out = io.BytesIO()
     doc.save(out)
     return out
-
-def reset_adv_state():
+    def reset_adv_state():
     if 'adv_solved' in st.session_state:
         st.session_state.adv_solved = False
 
@@ -897,13 +1571,19 @@ def render_advanced_shape_module():
     )
 
     if input_mode == "🖱️ Interactive 2D CAD (New!)":
-        st.info("💡 **Interactive Mode:** Draw, snap, and assign loads directly on the black screen below. Click 'Send to Python & Solve' when ready.")
+        st.info("💡 **Interactive Mode:** Draw, snap, and assign loads directly on the black screen below. Click 'Sync with Python' when ready.")
         
-        uploaded_dxf_interactive = st.file_uploader("📥 Upload DXF to Interactive CAD", type=['dxf'], key='interactive_dxf')
+        uploaded_dxf_interactive = st.file_uploader(
+            "📥 Upload DXF to Interactive CAD", 
+            type=['dxf'], 
+            key='interactive_dxf'
+        )
+        
         initial_dxf = None
         
         if uploaded_dxf_interactive:
             parsed_raw = extract_dxf_for_interactive(uploaded_dxf_interactive.getvalue())
+            
             if parsed_raw:
                 import uuid
                 parsed_raw['id'] = str(uuid.uuid4())
@@ -916,7 +1596,7 @@ def render_advanced_shape_module():
         build_dir = os.path.join(parent_dir, "cad_component")
         
         if not os.path.exists(build_dir) or not os.path.exists(os.path.join(build_dir, "index.html")):
-            st.error(f"❌ Could not find 'cad_component/index.html'. Please create this folder in the root directory and add the HTML code.")
+            st.error("❌ Could not find 'cad_component/index.html'. Please create this folder in the root directory and add the HTML code.")
             return
 
         try:
@@ -940,13 +1620,12 @@ def render_advanced_shape_module():
                     dxf_parsed_format = export_cad_to_classic(cad_result)
                     
                     st.session_state.dxf_parsed = dxf_parsed_format
-                    st.session_state.num_loads_override = 0
+                    st.session_state.num_loads_override = len(cad_result.get('loads', []))
                     st.session_state.input_mode_radio = "📝 Classic Manual Input (V3)"
                     st.rerun()
 
             if run_btn:
                 with st.spinner("Generating Auto-Mesh & Solving Matrix..."):
-                    from main import build_cad_mesh 
                     nodes, elements, nodal_loads, display_nodes, supports_list, seg_sections = build_cad_mesh(cad_result)
                     U, R = solve_fea_engine(nodes, elements, nodal_loads, supports_list)
                     
@@ -966,9 +1645,10 @@ def render_advanced_shape_module():
         # =======================================================
         # CLASSIC MODE
         # =======================================================
+        st.markdown("### ⚙️ System Orientation")
         view_plane = st.radio(
             "📐 Structural Analysis Plane / System Projection", 
-            ["Section View", "Plan View"], 
+            ["Section View (XZ Axes - Vertical)", "Plan View (XY Axes - Horizontal)"], 
             horizontal=True, 
             on_change=reset_adv_state
         )
@@ -992,44 +1672,58 @@ def render_advanced_shape_module():
             if dxf_data:
                 st.session_state.dxf_parsed = dxf_data
                 st.session_state.num_loads_override = 0 
-                st.success("✅ DXF Parsed Successfully!")
+                st.success("✅ DXF Parsed Successfully! Auto-Meshed segments generated.")
             else: 
-                st.error("❌ Failed to extract meaningful data.")
+                st.error("❌ Failed to extract meaningful data. Ensure layers are named 'frame', 'supp', 'push'.")
 
         dxf_data = st.session_state.get('dxf_parsed', None)
-        num_loads_def = st.session_state.get('num_loads_override', 0 if dxf_data else 1)
+        num_loads_def = st.session_state.get('num_loads_override', 1)
 
         c_in, c_plot = st.columns([1.2, 1.8])
         with c_in:
             st.markdown("### 1. Supports & Base System")
+            
             def_supp_count = len(dxf_data['supports']) if dxf_data else 2
             num_base_sups = st.number_input("Count of Point Supports", 0, 50, def_supp_count, on_change=reset_adv_state)
             
             base_sups = []
             for i in range(int(num_base_sups)):
-                sp1, sp2 = st.columns(2)
+                sp1, sp2, sp3 = st.columns([1.5, 1.5, 1])
+                
                 def_sx = float(i*2.0)
                 def_sy = 0.0
                 dxf_seg_idx = None
                 dxf_s_dist = None
+                def_type = "Hinged"
                 
                 if dxf_data and i < len(dxf_data['supports']):
                     def_sx = dxf_data['supports'][i].get('x', 0.0)
                     def_sy = dxf_data['supports'][i].get('y', 0.0)
                     dxf_seg_idx = dxf_data['supports'][i].get('seg_idx')
                     dxf_s_dist = dxf_data['supports'][i].get('s_dist')
+                    def_type = dxf_data['supports'][i].get('type', 'Hinged')
                     
                 sx = sp1.number_input(f"Sup J{i+1} X (m)", value=float(def_sx), format="%.5f", on_change=reset_adv_state, key=f"sx_{i}")
-                styp = sp2.selectbox(f"Sup J{i+1} Type", ["Hinged", "Roller", "Fixed"], key=f"sp_{i}", on_change=reset_adv_state)
-                sup_dict = {'x': sx, 'y': def_sy, 'type': styp}
+                
+                type_opts = ["Hinged", "Roller", "Fixed"]
+                idx_type = type_opts.index(def_type) if def_type in type_opts else 0
+                styp = sp2.selectbox(f"Sup J{i+1} Type", type_opts, index=idx_type, key=f"sp_{i}", on_change=reset_adv_state)
+                
+                ang = 0.0
+                if styp == "Roller":
+                    ang = sp3.number_input(f"Angle (°)", value=0.0, step=15.0, key=f"sang_{i}", on_change=reset_adv_state)
+                    
+                sup_dict = {'x': sx, 'y': def_sy, 'type': styp, 'angle': ang}
                 
                 if dxf_seg_idx is not None and abs(sx - def_sx) < 1e-4:
                     sup_dict['seg_idx'] = dxf_seg_idx
                     sup_dict['s_dist'] = dxf_s_dist
+                    
                 base_sups.append(sup_dict)
 
-            st.markdown("### 2. Segments")
-            num_segs = st.number_input("Number of Segments", min_value=1, max_value=50, value=len(dxf_data['segments']) if dxf_data else 1, on_change=reset_adv_state)
+            st.markdown("### 2. Segments (Frames)")
+            
+            num_segs = st.number_input("Number of Segments", min_value=1, max_value=100, value=len(dxf_data['segments']) if dxf_data else 1, on_change=reset_adv_state)
             seg_choices = [f"S{i+1}" for i in range(int(num_segs))]
             segments = []
             
@@ -1078,14 +1772,21 @@ def render_advanced_shape_module():
                             sweep = d_seg.get('sweep')
                             
                     if is_dxf:
-                        st.success(f"🔒 DXF Locked: {s_type_raw}")
+                        st.success(f"🔒 Mapped DXF Element: {s_type_raw} | Length: {def_L:.3f} m")
                         s_type = s_type_raw
                         L = def_L
                         kappa = d_seg.get('kappa', 0.0)
                         smooth = False
                         start_angle = def_ang
                     else:
-                        s_type = st.radio(f"Shape Type (S{i+1})", ["Straight Line", "Curve (Arc)"], index=s_type_idx, key=f"t_{i}", horizontal=True, on_change=reset_adv_state)
+                        s_type = st.radio(
+                            f"Shape Type (S{i+1})", 
+                            ["Straight Line", "Curve (Arc)"], 
+                            index=s_type_idx, 
+                            key=f"t_{i}", 
+                            horizontal=True, 
+                            on_change=reset_adv_state
+                        )
                         smooth = True
                         start_angle = 0.0
                         
@@ -1093,16 +1794,16 @@ def render_advanced_shape_module():
                             start_angle = st.number_input("Starting Angle (°)", value=float(def_ang), key=f"sa_{i}", on_change=reset_adv_state)
                             smooth = False
                         else:
-                            smooth = st.checkbox(f"Smooth S{i+1}", value=def_smooth, key=f"sm_{i}", on_change=reset_adv_state)
+                            smooth = st.checkbox(f"Smooth connection to previous segment (S{i+1})", value=def_smooth, key=f"sm_{i}", on_change=reset_adv_state)
                             if not smooth: 
-                                start_angle = st.number_input(f"New Angle S{i+1} (°)", value=float(def_ang), key=f"sa_{i}", on_change=reset_adv_state)
+                                start_angle = st.number_input(f"New Independent Angle S{i+1} (°)", value=float(def_ang), key=f"sa_{i}", on_change=reset_adv_state)
                                 
                         if s_type == "Straight Line": 
-                            L = st.number_input(f"L (m)", value=float(def_L), key=f"l_{i}", on_change=reset_adv_state)
+                            L = st.number_input(f"Length L (m)", value=float(def_L), key=f"l_{i}", on_change=reset_adv_state)
                             kappa = 0.0
                         else:
-                            r_val = st.number_input(f"R (m)", value=float(def_R), key=f"r_{i}", on_change=reset_adv_state)
-                            L = st.number_input(f"Arc L (m)", value=float(def_S), key=f"al_{i}", on_change=reset_adv_state)
+                            r_val = st.number_input(f"Radius R (m)", value=float(def_R), key=f"r_{i}", on_change=reset_adv_state)
+                            L = st.number_input(f"Arc Length (m)", value=float(def_S), key=f"al_{i}", on_change=reset_adv_state)
                             kappa = 1.0/r_val
                     
                     seg_info = {
@@ -1130,59 +1831,129 @@ def render_advanced_shape_module():
 
             st.markdown("### 3. Properties")
             sec_list = list(SECTIONS_DB.keys()) if SECTIONS_DB else ["Soldier U100"]
-            master_sec_name = st.selectbox("Master Section", sec_list, on_change=reset_adv_state)
+            master_sec_name = st.selectbox("Master Section (Applies to all frames)", sec_list, on_change=reset_adv_state)
+            
             master_raw = SECTIONS_DB.get(master_sec_name, {})
             master_props = {
                 'name': master_sec_name, 
                 'E': master_raw.get('E', 2100.0), 
-                'A': master_raw.get('A', 0.0034), 
-                'I': master_raw.get('I', 412.0), 
+                'A': master_raw.get('A', master_raw.get('A_cm2', 34.3) / 10000.0), 
+                'I': master_raw.get('I', master_raw.get('I_cm4', 412.0)), 
                 'Mall': master_raw.get('Mall', 13.1), 
                 'Qall': master_raw.get('Qall', 100.8)
             }
-            seg_sections = [master_props for _ in range(int(num_segs))]
+            
+            seg_sections = []
+            with st.expander("🛠️ Override Specific Segments"):
+                st.info("Check a segment below if you want to assign a different section to it.")
+                for i in range(int(num_segs)):
+                    ovr = st.checkbox(f"Override Segment S{i+1}", key=f"ov_chk_{i}", on_change=reset_adv_state)
+                    if ovr:
+                        ovr_name = st.selectbox(f"Section for S{i+1}", sec_list, key=f"ov_sec_{i}", on_change=reset_adv_state)
+                        ovr_raw = SECTIONS_DB.get(ovr_name, {})
+                        seg_sections.append({
+                            'name': ovr_name, 
+                            'E': ovr_raw.get('E', 2100.0), 
+                            'A': ovr_raw.get('A', ovr_raw.get('A_cm2', 34.3) / 10000.0), 
+                            'I': ovr_raw.get('I', ovr_raw.get('I_cm4', 412.0)), 
+                            'Mall': ovr_raw.get('Mall', 13.1), 
+                            'Qall': ovr_raw.get('Qall', 100.8)
+                        })
+                    else:
+                        seg_sections.append(master_props)
 
-            st.markdown("### 4. Applied Loads")
-            num_loads = st.number_input("Count of Loads", 0, 30, num_loads_def, on_change=reset_adv_state)
+            st.markdown("### 4. Applied Loads (Dead & Live & Wind)")
+            
+            st.markdown(
+                """
+                <div style="border: 1px solid #e91e63; padding: 10px; border-radius: 4px; margin-bottom: 15px;">
+                    <h4 style="font-size: 14px; color: #e91e63; margin-bottom: 5px;">⚙️ Load Combinations</h4>
+                </div>
+                """, 
+                unsafe_allow_html=True
+            )
+            
+            cc_d, cc_l, cc_w = st.columns(3)
+            fac_d = cc_d.number_input("Dead Factor", value=1.2, step=0.1, key="cmb_d")
+            fac_l = cc_l.number_input("Live Factor", value=1.6, step=0.1, key="cmb_l")
+            fac_w = cc_w.number_input("Wind Factor", value=0.0, step=0.1, key="cmb_w")
+            
+            combo_factors = {'Dead Load': fac_d, 'Live Load': fac_l, 'Wind Load': fac_w}
+            
+            num_loads = st.number_input("Count of Loads", 0, 50, num_loads_def, on_change=reset_adv_state)
             combined_loads = []
             
+            dir_options = ["Global Z (Vertical)", "Global X (Horizontal)", "Local Z (Perpendicular)"]
+            if "Plan" in view_plane:
+                dir_options = ["Global Y (Vertical)", "Global X (Horizontal)", "Local Y (Perpendicular)"]
+                
             for i in range(int(num_loads)):
-                with st.expander(f"📥 Load {i+1}", expanded=(i==0)):
-                    l_type = st.selectbox("Type", ["Uniform", "Trapezoidal", "Point Load"], key=f"ld_t_{i}")
-                    l_dir = st.selectbox("Direction", ["Global Z", "Global X", "Local Z"], key=f"ld_d_{i}")
-                    s_choice = st.selectbox("Segment", seg_choices, key=f"ld_single_{i}")
-                    s_idx_num = int(s_choice[1:]) - 1
+                with st.expander(f"📥 Load Item {i+1}", expanded=(i==0)):
+                    col_l1, col_l2, col_l3 = st.columns(3)
                     
-                    col1, col2 = st.columns(2)
-                    with col1:
-                        w1 = st.number_input("Value W1", value=-15.0, key=f"ld_w1_{i}")
-                    with col2:
-                        w2 = w1
-                        if l_type == 'Trapezoidal':
-                            w2 = st.number_input("Value W2", value=-5.0, key=f"ld_w2_{i}")
+                    load_category = col_l1.selectbox("Load Category", ["Dead Load", "Live Load", "Wind Load"], key=f"ld_cat_{i}", on_change=reset_adv_state)
+                    l_type = col_l2.selectbox("Type", ["Uniform", "Trapezoidal", "Point Load"], key=f"ld_t_{i}", on_change=reset_adv_state)
+                    l_dir = col_l3.selectbox("Direction", dir_options, key=f"ld_d_{i}", on_change=reset_adv_state)
                     
-                    combined_loads.append({
-                        'seg_idx': s_idx_num, 
-                        'type': l_type, 
-                        'dir': l_dir, 
-                        'start': 0.0, 
-                        'end': float(segments[s_idx_num].get('L', 0.0)), 
-                        'w1': w1, 
-                        'w2': w2
-                    })
+                    target_mode = st.radio("Apply Load To:", ["Single Segment", "Multiple Segments", "All Segments"], key=f"ld_mode_{i}", horizontal=True, on_change=reset_adv_state)
+                    
+                    target_segments = []
+                    if target_mode == "Single Segment":
+                        s_choice = st.selectbox("Select Segment", seg_choices, key=f"ld_single_{i}", on_change=reset_adv_state)
+                        target_segments.append(int(s_choice[1:]) - 1)
+                    elif target_mode == "Multiple Segments":
+                        selected_segs = st.multiselect("Select Segments", seg_choices, default=[seg_choices[0]] if seg_choices else [], key=f"ld_multi_{i}", on_change=reset_adv_state)
+                        target_segments = [int(s[1:]) - 1 for s in selected_segs]
+                    else:
+                        target_segments = list(range(int(num_segs)))
+                        
+                    sc1, sc2, sc3 = st.columns(3)
+                    w1 = sc1.number_input("Value W1 (kN/m or kN)", value=-15.0, key=f"ld_w1_{i}", on_change=reset_adv_state)
+                    
+                    w2_val = w1 
+                    if l_type == "Trapezoidal": 
+                        w2_val = sc2.number_input("Value W2 (kN/m)", value=-5.0, key=f"ld_w2_{i}", on_change=reset_adv_state)
+                    
+                    for s_idx_num in target_segments:
+                        max_s = float(segments[s_idx_num].get('L', 0.0))
+                        start = 0.0
+                        end = max_s
+                        
+                        if target_mode == "Single Segment":
+                            start = sc1.number_input("Start Arc Dist (m)", 0.0, max_s, value=0.0, format="%.5f", key=f"ld_st_{i}_{s_idx_num}", on_change=reset_adv_state) 
+                            end = sc3.number_input("End Arc Dist (m)", 0.0, max_s, value=max_s, format="%.5f", key=f"ld_en_{i}_{s_idx_num}", on_change=reset_adv_state) 
+                            
+                        if l_type == 'Point Load': 
+                            end = start
+                            
+                        factored_w1 = w1 * combo_factors[load_category]
+                        factored_w2 = w2_val * combo_factors[load_category]
+                        
+                        combined_loads.append({
+                            'seg_idx': s_idx_num, 
+                            'category': load_category,
+                            'type': l_type, 
+                            'dir': l_dir, 
+                            'start': start, 
+                            'end': end, 
+                            'w1': factored_w1, 
+                            'w2': factored_w2
+                        })
 
-            st.markdown("### 5. Struts")
+            st.markdown("### 5. Struts (Push-Pulls & Ties)")
             num_struts = st.number_input("Count of Struts", 0, 50, len(dxf_data['struts']) if dxf_data else 1, on_change=reset_adv_state)
             struts_data = []
             
-            strut_opts = list(STRUTS_DB.keys()) if STRUTS_DB else ["PPH 353"]
+            strut_opts = list(STRUTS_DB.keys()) if STRUTS_DB else ["PPH 353 (1.5:3.5m)"]
             
             for i in range(int(num_struts)):
                 with st.expander(f"📏 Strut P{i+1}", expanded=(num_struts<3)):
                     def_s_idx = 0
-                    def_dist = 1.0
+                    def_dist = float(segments[0].get('L', 0.0))/2 if segments else 1.0
                     def_gx = 3.0
                     def_gy = 0.0
+                    
+                    is_dxf_strut = False
                     
                     if dxf_data and i < len(dxf_data['struts']):
                         ds = dxf_data['struts'][i]
@@ -1190,17 +1961,38 @@ def render_advanced_shape_module():
                         def_dist = ds.get('dist', 0.0)
                         def_gx = ds.get('gx', 0.0)
                         def_gy = ds.get('gy', 0.0)
-                        
-                        st.success(f"🔒 Mapped Strut: S{def_s_idx+1}")
+                        is_dxf_strut = True
+                        st.success(f"🔒 Auto-Snapped Strut to Segment: S{def_s_idx+1}")
                         
                     cc1, cc2, cc3, cc4 = st.columns(4)
+                    
                     s_idx_num = min(def_s_idx, len(seg_choices) - 1)
-                    s_idx = cc1.selectbox("On Seg No.", seg_choices, index=s_idx_num, key=f"st_s_{i}")
+                    s_idx = cc1.selectbox("Snap to Seg No.", seg_choices, index=s_idx_num, key=f"st_s_{i}", on_change=reset_adv_state)
                     selected_idx = int(s_idx[1:]) - 1
                     
-                    dist = cc2.number_input("Arc Dist (m)", value=float(def_dist), key=f"st_d_{i}")
-                    gx = cc3.number_input("Ground X (m)", value=float(def_gx), key=f"st_gx_{i}")
-                    st_sec = cc4.selectbox(f"P{i+1} Type", strut_opts, key=f"st_sec_{i}")
+                    max_s_strut = float(segments[selected_idx].get('L', 0.0))
+                    safe_dist = min(max(float(def_dist), 0.0), max_s_strut)
+                    
+                    dist = cc2.number_input("Snap Distance (m)", 0.0, max_s_strut, value=safe_dist, format="%.5f", key=f"st_d_{i}", on_change=reset_adv_state)
+                    gx = cc3.number_input("Ground X (m)", value=float(def_gx), step=0.5, format="%.5f", key=f"st_gx_{i}", on_change=reset_adv_state)
+                    
+                    nx, ny = get_approx_xy(segments, selected_idx, dist)
+                    actual_L = math.hypot(gx - nx, def_gy - ny)
+                    
+                    valid_opts = []
+                    for opt in strut_opts:
+                        m = re.search(r'\((\d+\.\d+):(\d+\.\d+)m\)', opt)
+                        if m:
+                            min_l = float(m.group(1))
+                            max_l = float(m.group(2))
+                            if min_l <= actual_L <= max_l:
+                                valid_opts.append(opt)
+                                
+                    if not valid_opts: 
+                        valid_opts = strut_opts
+                        st.warning("⚠️ Warning: Actual strut length does not match databases!")
+
+                    st_sec = cc4.selectbox(f"Type (L={actual_L:.2f}m)", valid_opts, key=f"st_sec_{i}", on_change=reset_adv_state)
                     
                     struts_data.append({
                         'seg_idx': selected_idx, 
@@ -1210,28 +2002,34 @@ def render_advanced_shape_module():
                         'sec': st_sec
                     })
 
-        nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(segments, seg_sections, combined_loads, struts_data, None, base_sups, {'type': 'Hinged', 'angle': 0.0}, mesh_size=auto_mesh_size)
+        nodes, elements, nodal_loads, display_nodes, supports_list, seg_starts = build_chain_mesh(
+            segments, seg_sections, combined_loads, struts_data, None, base_sups, {'type': 'Hinged', 'angle': 0.0}, mesh_size=auto_mesh_size
+        )
 
         with c_plot:
-            st.markdown("### Live Geometry")
+            st.markdown("<h3 style='text-align: center; border-bottom: 2px solid #ddd; padding-bottom: 10px; font-family: Arial; color: #1e3d59;'>Live Geometry & Load Assignments</h3>", unsafe_allow_html=True)
             live_img = draw_live_preview(nodes, elements, supports_list, seg_sections, combined_loads, segments, seg_starts)
             st.image(live_img, use_container_width=True)
 
-        if st.button("🚀 Run Classic Analysis", type="primary"):
-            U, R = solve_fea_engine(nodes, elements, nodal_loads, supports_list)
-            st.session_state.adv_fea_data = {
-                'U': U, 
-                'R': R, 
-                'nodes': nodes, 
-                'elements': elements, 
-                'display_nodes': display_nodes,
-                'supports_list': supports_list, 
-                'seg_sections': seg_sections,
-                'loads_data': combined_loads, 
-                'segments': segments, 
-                'seg_starts': seg_starts
-            }
-            st.session_state.adv_solved = True
+        if st.button("🚀 Run Classic Analysis (Factored)", type="primary"):
+            with st.spinner("Generating Matrix & Solving..."):
+                U, R = solve_fea_engine(nodes, elements, nodal_loads, supports_list)
+                
+                st.session_state.adv_fea_data = {
+                    'U': U, 
+                    'R': R, 
+                    'nodes': nodes, 
+                    'elements': elements, 
+                    'display_nodes': display_nodes,
+                    'supports_list': supports_list, 
+                    'seg_sections': seg_sections,
+                    'loads_data': combined_loads, 
+                    'segments': segments, 
+                    'seg_starts': seg_starts
+                }
+                st.session_state.adv_solved = True
+                
+            st.success("✅ Analysis Complete based on Applied Load Combinations!")
 
     # =======================================================
     # COMMON RENDER LOGIC (FOR BOTH INTERACTIVE & CLASSIC)
@@ -1260,10 +2058,31 @@ def render_advanced_shape_module():
             seg_starts=fea_data.get('seg_starts')
         )
 
+        titles = {
+            'React': "Reactions Diagram (kN)",
+            'N': "Axial Force Diagram (kN)",
+            'V': "Shear Force Diagram (kN)",
+            'M': "Bending Moment Diagram (kN.m)",
+            'D': "Deflection Deformed Shape"
+        }
+
         c_p1, c_p2, c_p3 = st.columns(3)
+        
         c_p1.image(img_bufs['React'], use_container_width=True)
+        c_p1.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['React']}</p>", unsafe_allow_html=True)
+        
         c_p2.image(img_bufs['V'], use_container_width=True)
+        c_p2.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['V']}</p>", unsafe_allow_html=True)
+        
         c_p3.image(img_bufs['M'], use_container_width=True)
+        c_p3.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['M']}</p>", unsafe_allow_html=True)
+        
+        c_p4, c_p5 = st.columns(2)
+        c_p4.image(img_bufs['N'], use_container_width=True)
+        c_p4.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['N']}</p>", unsafe_allow_html=True)
+        
+        c_p5.image(img_bufs['D'], use_container_width=True)
+        c_p5.markdown(f"<p style='text-align: center; border-bottom: 1px solid gray; padding-bottom: 5px; font-family: Arial; font-size: 14px;'>{titles['D']}</p>", unsafe_allow_html=True)
         
         st.markdown("### 📊 Safety Summary")
         safety_data = []
@@ -1271,13 +2090,14 @@ def render_advanced_shape_module():
             max_m = 0.0
             max_v = 0.0
             for el in fea_data['elements']:
-                if el.get('group') == 'segment':
+                if el.get('group') == 'segment' and el.get('seg_idx') == i:
                     max_m = max(max_m, np.max(np.abs(el.get('internal', {}).get('M', [0]))))
                     max_v = max(max_v, np.max(np.abs(el.get('internal', {}).get('V', [0]))))
             
             s_status = "SAFE" if max_m <= sec['Mall'] and max_v <= sec['Qall'] else "UNSAFE"
+            
             safety_data.append({
-                "Component": f"S{i+1}", 
+                "Component": f"S{i+1} ({get_short_name(sec['name'])})", 
                 "Force Type": "Bending & Shear", 
                 "Actual": f"M={max_m:.1f}, V={max_v:.1f}", 
                 "Allowable": f"M={sec['Mall']:.1f}, V={sec['Qall']:.1f}", 
@@ -1292,7 +2112,8 @@ def render_advanced_shape_module():
         st.download_button(
             "⬇️ Download Calculation Sheet (Word)", 
             data=doc_out.getvalue(), 
-            file_name="Advanced_Shape_Calculation_Sheet.docx"
+            file_name="Advanced_Shape_Calculation_Sheet.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
 
 if __name__ == "__main__":
