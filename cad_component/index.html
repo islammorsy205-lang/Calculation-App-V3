@@ -6,22 +6,108 @@
     <!-- مكتبة الرسم الأساسية -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, sans-serif; }
-        body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background-color: #1e1e24; color: white; user-select: none; }
-        .header { background-color: #2b2b36; padding: 10px 20px; display: flex; justify-content: space-between; border-bottom: 2px solid #ff6e40; }
-        .workspace { display: flex; flex: 1; overflow: hidden; }
-        .sidebar { width: 340px; background-color: #25252d; padding: 15px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; border-right: 1px solid #3a3a46; border-left: 1px solid #3a3a46;}
-        .tool-btn { background-color: #32323e; color: white; border: 1px solid #454555; padding: 8px; cursor: pointer; border-radius: 4px; font-weight: bold; transition: 0.2s;}
-        .tool-btn:hover { background-color: #ff6e40; }
-        .canvas-container-wrap { flex: 1; position: relative; width: 100%; height: 100%; background-color: #000000;}
-        .prop-group { margin-bottom: 10px; }
-        .prop-group label { display: block; font-size: 11px; color: #8a8a98; margin-bottom: 3px; }
-        .prop-group select, .prop-group input { width: 100%; background: #1e1e24; border: 1px solid #3a3a46; color: white; padding: 6px; border-radius: 4px; }
-        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px;}
-        th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
-        th { background: #2b2b36; color: white; }
-        .flex-row { display: flex; gap: 5px; }
-        .table-input { width: 60px; padding: 2px; background: #333; color: #00FFFF; border: 1px solid #555; text-align: center;}
+        * { 
+            margin: 0; 
+            padding: 0; 
+            box-sizing: border-box; 
+            font-family: 'Segoe UI', Tahoma, sans-serif; 
+        }
+        body { 
+            display: flex; 
+            flex-direction: column; 
+            height: 100vh; 
+            overflow: hidden; 
+            background-color: #1e1e24; 
+            color: white; 
+            user-select: none; 
+        }
+        .header { 
+            background-color: #2b2b36; 
+            padding: 10px 20px; 
+            display: flex; 
+            justify-content: space-between; 
+            border-bottom: 2px solid #ff6e40; 
+        }
+        .workspace { 
+            display: flex; 
+            flex: 1; 
+            overflow: hidden; 
+        }
+        .sidebar { 
+            width: 340px; 
+            background-color: #25252d; 
+            padding: 15px; 
+            display: flex; 
+            flex-direction: column; 
+            gap: 10px; 
+            overflow-y: auto; 
+            border-right: 1px solid #3a3a46; 
+            border-left: 1px solid #3a3a46;
+        }
+        .tool-btn { 
+            background-color: #32323e; 
+            color: white; 
+            border: 1px solid #454555; 
+            padding: 8px; 
+            cursor: pointer; 
+            border-radius: 4px; 
+            font-weight: bold; 
+            transition: 0.2s;
+        }
+        .tool-btn:hover { 
+            background-color: #ff6e40; 
+        }
+        .canvas-container-wrap { 
+            flex: 1; 
+            position: relative; 
+            width: 100%; 
+            height: 100%; 
+            background-color: #000000;
+        }
+        .prop-group { 
+            margin-bottom: 10px; 
+        }
+        .prop-group label { 
+            display: block; 
+            font-size: 11px; 
+            color: #8a8a98; 
+            margin-bottom: 3px; 
+        }
+        .prop-group select, .prop-group input { 
+            width: 100%; 
+            background: #1e1e24; 
+            border: 1px solid #3a3a46; 
+            color: white; 
+            padding: 6px; 
+            border-radius: 4px; 
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 15px; 
+            font-size: 13px;
+        }
+        th, td { 
+            border: 1px solid #ccc; 
+            padding: 6px; 
+            text-align: center; 
+        }
+        th { 
+            background: #2b2b36; 
+            color: white; 
+        }
+        .flex-row { 
+            display: flex; 
+            gap: 5px; 
+        }
+        .table-input { 
+            width: 60px; 
+            padding: 2px; 
+            background: #333; 
+            color: #00FFFF; 
+            border: 1px solid #555; 
+            text-align: center;
+        }
     </style>
 </head>
 <body>
@@ -35,6 +121,7 @@
     </div>
 
     <div class="workspace">
+        <!-- Sidebar Left -->
         <div class="sidebar">
             <button class="tool-btn" style="background-color: #00bcd4;" onclick="drawManualFrame()">✏️ Draw Frame Line</button>
             
@@ -49,10 +136,15 @@
                 <div style="max-height: 150px; overflow-y: auto;">
                     <table id="supportTable">
                         <thead>
-                            <tr><th>Sup #</th><th>X Dist (m)</th></tr>
+                            <tr>
+                                <th>Sup #</th>
+                                <th>X Dist (m)</th>
+                            </tr>
                         </thead>
                         <tbody id="supportTrackerBody">
-                            <tr><td colspan="2" style="color:gray;">Set Origin to enable editing</td></tr>
+                            <tr>
+                                <td colspan="2" style="color:gray;">Set Origin to enable editing</td>
+                            </tr>
                         </tbody>
                     </table>
                 </div>
@@ -61,9 +153,18 @@
             <div style="border: 1px solid #e91e63; padding: 10px; border-radius: 4px; margin-top: 10px;">
                 <h4 style="font-size: 12px; color: #e91e63; margin-bottom: 5px;">⚙️ Load Combinations</h4>
                 <div class="flex-row">
-                    <div class="prop-group" style="flex: 1;"><label>Dead Factor</label><input type="number" id="fac_d" value="1.2" step="0.1"></div>
-                    <div class="prop-group" style="flex: 1;"><label>Live Factor</label><input type="number" id="fac_l" value="1.6" step="0.1"></div>
-                    <div class="prop-group" style="flex: 1;"><label>Wind Factor</label><input type="number" id="fac_w" value="0.0" step="0.1"></div>
+                    <div class="prop-group" style="flex: 1;">
+                        <label>Dead Factor</label>
+                        <input type="number" id="fac_d" value="1.2" step="0.1">
+                    </div>
+                    <div class="prop-group" style="flex: 1;">
+                        <label>Live Factor</label>
+                        <input type="number" id="fac_l" value="1.6" step="0.1">
+                    </div>
+                    <div class="prop-group" style="flex: 1;">
+                        <label>Wind Factor</label>
+                        <input type="number" id="fac_w" value="0.0" step="0.1">
+                    </div>
                 </div>
             </div>
         </div>
@@ -72,6 +173,7 @@
             <canvas id="designCanvas"></canvas>
         </div>
 
+        <!-- Sidebar Right -->
         <div class="sidebar">
             <div style="border: 1px solid #3399FF; padding: 10px; border-radius: 4px;">
                 <h4 style="font-size: 12px; color: #3399FF; margin-bottom: 5px;">➕ Placement</h4>
@@ -84,65 +186,132 @@
             <div style="border: 1px solid #ffeb3b; padding: 10px; border-radius: 4px; margin-top: 10px;">
                 <h4 style="font-size: 12px; color: #ffeb3b; margin-bottom: 5px;">🎯 Load Manager</h4>
                 <div class="flex-row">
-                    <div class="prop-group" style="flex: 1;"><label>Load Case</label><select id="load_case"><option value="D">Dead Load</option><option value="L">Live Load</option><option value="W">Wind Load</option></select></div>
-                    <div class="prop-group" style="flex: 1;"><label>Action</label><select id="load_action"><option value="Add">Add to Existing</option><option value="Replace">Replace Existing</option></select></div>
+                    <div class="prop-group" style="flex: 1;">
+                        <label>Load Case</label>
+                        <select id="load_case">
+                            <option value="D">Dead Load</option>
+                            <option value="L">Live Load</option>
+                            <option value="W">Wind Load</option>
+                        </select>
+                    </div>
+                    <div class="prop-group" style="flex: 1;">
+                        <label>Action</label>
+                        <select id="load_action">
+                            <option value="Add">Add to Existing</option>
+                            <option value="Replace">Replace Existing</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="flex-row">
-                    <div class="prop-group" style="flex: 1;"><label>Shape</label><select id="load_type" onchange="document.getElementById('div_w2').style.display = this.value === 'Trapezoidal' ? 'block' : 'none';"><option value="Uniform">Uniform</option><option value="Trapezoidal">Trapezoidal</option><option value="Point">Point Load</option></select></div>
-                    <div class="prop-group" style="flex: 1;"><label>Direction</label><select id="load_dir"><option value="Vertical">Global Vertical</option><option value="Local">Local</option></select></div>
+                    <div class="prop-group" style="flex: 1;">
+                        <label>Shape</label>
+                        <select id="load_type" onchange="toggleLoadInputs()">
+                            <option value="Uniform">Uniform</option>
+                            <option value="Trapezoidal">Trapezoidal</option>
+                            <option value="Point">Point Load</option>
+                        </select>
+                    </div>
+                    <div class="prop-group" style="flex: 1;">
+                        <label>Direction</label>
+                        <select id="load_dir">
+                            <option value="Vertical">Global Vertical</option>
+                            <option value="Local">Local</option>
+                        </select>
+                    </div>
                 </div>
                 <div class="flex-row">
-                    <div class="prop-group" style="flex: 1;"><label>W1/P (kN)</label><input type="number" id="load_w1" value="15.0"></div>
-                    <div class="prop-group" style="flex: 1; display: none;" id="div_w2"><label>W2 (kN)</label><input type="number" id="load_w2" value="5.0"></div>
+                    <div class="prop-group" style="flex: 1;">
+                        <label>W1/P (kN)</label>
+                        <input type="number" id="load_w1" value="15.0">
+                    </div>
+                    <div class="prop-group" style="flex: 1; display: none;" id="div_w2">
+                        <label>W2 (kN)</label>
+                        <input type="number" id="load_w2" value="5.0">
+                    </div>
                 </div>
                 <button class="tool-btn" onclick="applyLoad()" style="width:100%; background-color: #4CAF50;">Apply Load</button>
             </div>
             
             <h3 style="font-size: 13px; color: #ff6e40; border-bottom: 1px solid #333; padding-bottom: 5px; margin-top: 10px;">Properties</h3>
-            <div class="prop-group"><label>Selected ID</label><input type="text" id="prop_id" readonly style="color: yellow; font-weight: bold;"></div>
+            <div class="prop-group">
+                <label>Selected ID</label>
+                <input type="text" id="prop_id" readonly style="color: yellow; font-weight: bold;">
+            </div>
             
             <div id="prop_frame" style="display:none;">
-                <div class="prop-group"><label>Section</label><select id="sel_frame_sec" onchange="updateOverrides()"><option value="Soldier U100">Soldier U100</option><option value="Soldier U140">Soldier U140</option><option value="Timber 10x10">Timber 10x10</option></select></div>
+                <div class="prop-group">
+                    <label>Section</label>
+                    <select id="sel_frame_sec" onchange="updateOverrides()">
+                        <option value="Soldier U100">Soldier U100</option>
+                        <option value="Soldier U140">Soldier U140</option>
+                        <option value="Timber 10x10">Timber 10x10</option>
+                    </select>
+                </div>
             </div>
+            
             <div id="prop_strut" style="display:none;">
-                <div class="prop-group"><label>Strut Type</label><select id="sel_strut_sec" onchange="updateOverrides()"><option value="PPH 353 (1.5:3.5m)">PPH 353 (1.5:3.5m)</option><option value="PPS 600 (3.0:6.0m)">PPS 600 (3.0:6.0m)</option></select></div>
+                <div class="prop-group">
+                    <label>Strut Type</label>
+                    <select id="sel_strut_sec" onchange="updateOverrides()">
+                        <option value="PPH 353 (1.5:3.5m)">PPH 353 (1.5:3.5m)</option>
+                        <option value="PPS 600 (3.0:6.0m)">PPS 600 (3.0:6.0m)</option>
+                    </select>
+                </div>
             </div>
+            
             <div id="prop_support" style="display:none;">
                 <div class="flex-row">
-                    <div class="prop-group" style="flex: 1;"><label>Support Type</label><select id="sel_sup_type" onchange="updateOverrides()"><option value="Hinged">Hinged</option><option value="Roller">Roller</option><option value="Fixed">Fixed</option></select></div>
-                    <div class="prop-group" style="flex: 1;"><label>Rotation (°)</label><input type="number" id="sel_sup_ang" value="0" onchange="updateOverrides()"></div>
+                    <div class="prop-group" style="flex: 1;">
+                        <label>Support Type</label>
+                        <select id="sel_sup_type" onchange="updateOverrides()">
+                            <option value="Hinged">Hinged</option>
+                            <option value="Roller">Roller</option>
+                            <option value="Fixed">Fixed</option>
+                        </select>
+                    </div>
+                    <div class="prop-group" style="flex: 1;">
+                        <label>Rotation (°)</label>
+                        <input type="number" id="sel_sup_ang" value="0" onchange="updateOverrides()">
+                    </div>
                 </div>
-                <div class="prop-group"><label>Shoring System</label><select id="sel_sup_sys" onchange="updateOverrides()"><option value="On Ground">None</option><option value="Cup-lock">Cup-lock</option></select></div>
+                <div class="prop-group">
+                    <label>Shoring System</label>
+                    <select id="sel_sup_sys" onchange="updateOverrides()">
+                        <option value="On Ground">None</option>
+                        <option value="Cup-lock">Cup-lock</option>
+                    </select>
+                </div>
             </div>
         </div>
     </div>
 
     <script>
         // =========================================================
-        // 💡 STREAMLIT BULLETPROOF HANDSHAKE (THE FIX)
+        // 💡 THE BULLETPROOF STREAMLIT HANDSHAKE 
         // =========================================================
-        function sendMessageToStreamlitClient(type, data) {
-            var outData = Object.assign({
+        
+        function sendStreamlitMessage(type, data) {
+            // إضافة البادئة "streamlit:" التي يطلبها السيرفر حصرياً
+            let messageType = type;
+            if (!messageType.startsWith("streamlit:")) {
+                messageType = "streamlit:" + type;
+            }
+            
+            let message = Object.assign({
                 isStreamlitMessage: true,
-                type: type,
+                type: messageType,
             }, data);
-            window.parent.postMessage(outData, "*");
+            
+            window.parent.postMessage(message, "*");
         }
 
-        function forceStreamlitHeight() {
-            // إجبار السيرفر على تجهيز الشاشة وإعطائها طول 850 بيكسل
-            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
-            sendMessageToStreamlitClient("setFrameHeight", {height: 850});
+        function notifyReady() {
+            sendStreamlitMessage("componentReady", { apiVersion: 1 });
         }
 
-        // 1. نضرب الأمر فوراً
-        forceStreamlitHeight();
-        
-        // 2. نضرب الأمر لما الصفحة تحمل
-        window.addEventListener("load", forceStreamlitHeight);
-        
-        // 3. (الضربة القاضية للسيرفر) نضرب الأمر كل ثانية عشان نمنع السيرفر يخفي الشاشة أبداً
-        setInterval(forceStreamlitHeight, 1000);
+        function setFrameHeight(height) {
+            sendStreamlitMessage("setFrameHeight", { height: height });
+        }
 
         function sendDataToPython() {
             let combo = {
@@ -161,11 +330,41 @@
                 status: "ready"
             };
             
-            sendMessageToStreamlitClient("setComponentValue", {value: payload});
+            sendStreamlitMessage("setComponentValue", { value: payload });
+        }
+
+        // 1. التنفيذ الفوري عند فتح الملف
+        notifyReady();
+        setFrameHeight(850);
+        
+        // 2. التنفيذ عند تحميل الصفحة بالكامل
+        window.addEventListener("load", function() {
+            notifyReady();
+            setFrameHeight(850);
+        });
+        
+        // 3. التنفيذ عند تغيير حجم الشاشة
+        window.addEventListener("resize", function() {
+            setFrameHeight(850);
+        });
+
+        // 4. التكرار كل ثانية لمنع السيرفر من ضغط الشاشة
+        setInterval(function() {
+            setFrameHeight(850);
+        }, 1000);
+
+        function toggleLoadInputs() {
+            let loadType = document.getElementById('load_type').value;
+            let divW2 = document.getElementById('div_w2');
+            if (loadType === 'Trapezoidal') {
+                divW2.style.display = 'block';
+            } else {
+                divW2.style.display = 'none';
+            }
         }
 
         // =========================================================
-        // CORE CAD LOGIC
+        // CORE CAD LOGIC (Uncompressed)
         // =========================================================
         const wrapper = document.getElementById('canvas-wrapper');
         const canvas = new fabric.Canvas('designCanvas', { 
@@ -186,6 +385,7 @@
         let supportsList = [];
         let appliedLoads = [];
         let elementOverrides = {};
+        
         let ppx = 100;
         let originPt = null;
         
@@ -202,7 +402,14 @@
         let redoStack = [];
 
         function saveState() { 
-            undoStack.push(JSON.stringify({cadLines, strutsList, supportsList, appliedLoads, elementOverrides})); 
+            let stateObj = {
+                cadLines: cadLines, 
+                strutsList: strutsList, 
+                supportsList: supportsList, 
+                appliedLoads: appliedLoads, 
+                elementOverrides: elementOverrides
+            };
+            undoStack.push(JSON.stringify(stateObj)); 
             redoStack = []; 
             updateSupportTable(); 
         }
@@ -219,30 +426,59 @@
             
             cadLines.forEach(l => { 
                 let fLine = new fabric.Line([l.x1, l.y1, l.x2, l.y2], { 
-                    stroke: '#00FFFF', strokeWidth: 3, id: l.id, curve_id: l.curve_id, 
-                    lockMovementX: true, lockMovementY: true, hasControls: false 
+                    stroke: '#00FFFF', 
+                    strokeWidth: 3, 
+                    id: l.id, 
+                    curve_id: l.curve_id, 
+                    lockMovementX: true, 
+                    lockMovementY: true, 
+                    hasControls: false 
                 }); 
                 canvas.add(fLine); 
             });
             
-            strutsList.forEach(s => createStrutWithHandles(s.id, s.top_x, s.top_y, s.gx, s.gy, true));
-            supportsList.forEach(s => createSupport(s.id, s.x, s.y, true));
-            appliedLoads.forEach(ld => drawVisualLoad(ld.target, ld.w1, ld.w2, ld.dir, ld.case, ld.type));
+            strutsList.forEach(s => {
+                createStrutWithHandles(s.id, s.top_x, s.top_y, s.gx, s.gy, true);
+            });
+            
+            supportsList.forEach(s => {
+                createSupport(s.id, s.x, s.y, true);
+            });
+            
+            appliedLoads.forEach(ld => {
+                drawVisualLoad(ld.target, ld.w1, ld.w2, ld.dir, ld.case, ld.type);
+            });
             
             updateSupportTable();
         }
         
         function undoAction() { 
             if(undoStack.length > 0) { 
-                redoStack.push(JSON.stringify({cadLines, strutsList, supportsList, appliedLoads, elementOverrides})); 
-                restoreState(undoStack.pop()); 
+                let currentState = {
+                    cadLines: cadLines, 
+                    strutsList: strutsList, 
+                    supportsList: supportsList, 
+                    appliedLoads: appliedLoads, 
+                    elementOverrides: elementOverrides
+                };
+                redoStack.push(JSON.stringify(currentState)); 
+                let prevState = undoStack.pop();
+                restoreState(prevState); 
             } 
         }
         
         function redoAction() { 
             if(redoStack.length > 0) { 
-                undoStack.push(JSON.stringify({cadLines, strutsList, supportsList, appliedLoads, elementOverrides})); 
-                restoreState(redoStack.pop()); 
+                let currentState = {
+                    cadLines: cadLines, 
+                    strutsList: strutsList, 
+                    supportsList: supportsList, 
+                    appliedLoads: appliedLoads, 
+                    elementOverrides: elementOverrides
+                };
+                undoStack.push(JSON.stringify(currentState)); 
+                let nextState = redoStack.pop();
+                restoreState(nextState); 
             } 
         }
 
@@ -252,16 +488,26 @@
                 canvas.renderAll(); 
                 isSettingOrigin = false; 
                 isDrawing = false; 
-                if(tempLine) canvas.remove(tempLine); 
+                if(tempLine) {
+                    canvas.remove(tempLine); 
+                }
                 tempLine = null; 
-                canvas.defaultCursor='default'; 
+                canvas.defaultCursor = 'default'; 
                 hideProps();
             }
-            if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undoAction(); }
-            if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redoAction(); }
+            if (e.ctrlKey && e.key === 'z') { 
+                e.preventDefault(); 
+                undoAction(); 
+            }
+            if (e.ctrlKey && e.key === 'y') { 
+                e.preventDefault(); 
+                redoAction(); 
+            }
             if (e.key === 'Delete') {
                 let active = canvas.getActiveObjects(); 
-                if(active.length === 0) return; 
+                if(active.length === 0) {
+                    return; 
+                }
                 saveState();
                 
                 active.forEach(obj => {
@@ -270,7 +516,8 @@
                     } else if(obj.id.includes('Support')) {
                         supportsList = supportsList.filter(s => s.id !== obj.id);
                     } else if(obj.id.includes('Strut')) { 
-                        let stId = obj.id.split('_')[0] + '_' + obj.id.split('_')[1]; 
+                        let idParts = obj.id.split('_');
+                        let stId = idParts[0] + '_' + idParts[1]; 
                         strutsList = strutsList.filter(s => s.id !== stId); 
                     }
                 });
@@ -309,27 +556,44 @@
                 canvas.defaultCursor = 'grabbing'; 
                 return; 
             }
+            
             let p = canvas.getPointer(opt.e);
             
             if(isDrawing) {
                 if(!drawLineStart) {
                     drawLineStart = p;
-                    tempLine = new fabric.Line([p.x, p.y, p.x, p.y], { stroke: '#00FFFF', strokeWidth: 3, selectable: false });
+                    tempLine = new fabric.Line([p.x, p.y, p.x, p.y], { 
+                        stroke: '#00FFFF', 
+                        strokeWidth: 3, 
+                        selectable: false 
+                    });
                     canvas.add(tempLine);
                 } else {
                     saveState();
                     let id = 'Frame_' + fC++;
-                    cadLines.push({id: id, x1: drawLineStart.x, y1: drawLineStart.y, x2: p.x, y2: p.y, curve_id: 'None'});
+                    cadLines.push({
+                        id: id, 
+                        x1: drawLineStart.x, 
+                        y1: drawLineStart.y, 
+                        x2: p.x, 
+                        y2: p.y, 
+                        curve_id: 'None'
+                    });
                     let fLine = new fabric.Line([drawLineStart.x, drawLineStart.y, p.x, p.y], { 
-                        stroke: '#00FFFF', strokeWidth: 3, id: id, curve_id: 'None', 
-                        lockMovementX: true, lockMovementY: true, hasControls: false 
+                        stroke: '#00FFFF', 
+                        strokeWidth: 3, 
+                        id: id, 
+                        curve_id: 'None', 
+                        lockMovementX: true, 
+                        lockMovementY: true, 
+                        hasControls: false 
                     });
                     canvas.add(fLine); 
                     canvas.remove(tempLine); 
                     tempLine = null; 
                     drawLineStart = null; 
                     isDrawing = false; 
-                    canvas.defaultCursor='default';
+                    canvas.defaultCursor = 'default';
                 }
                 return;
             }
@@ -338,10 +602,16 @@
                 let snap = getNearestPointOnFrames(p.x, p.y); 
                 originPt = {x: snap.x, y: snap.y};
                 document.getElementById('origin_info').innerText = `Origin Set`;
-                canvas.add(new fabric.Circle({
-                    left: snap.x, top: snap.y, radius: 10, fill: 'red', 
-                    originX: 'center', originY: 'center', selectable: false
-                }));
+                let originCircle = new fabric.Circle({
+                    left: snap.x, 
+                    top: snap.y, 
+                    radius: 10, 
+                    fill: 'red', 
+                    originX: 'center', 
+                    originY: 'center', 
+                    selectable: false
+                });
+                canvas.add(originCircle);
                 isSettingOrigin = false; 
                 canvas.defaultCursor = 'default'; 
                 updateSupportTable(); 
@@ -350,7 +620,8 @@
             
             if (opt.target && opt.target.curve_id && opt.target.curve_id !== 'None') {
                 let curveObjs = canvas.getObjects().filter(o => o.curve_id === opt.target.curve_id);
-                canvas.setActiveObject(new fabric.ActiveSelection(curveObjs, { canvas: canvas }));
+                let selection = new fabric.ActiveSelection(curveObjs, { canvas: canvas });
+                canvas.setActiveObject(selection);
             }
         });
 
@@ -372,13 +643,19 @@
         
         canvas.on('mouse:up', function() { 
             this.isDragging = false; 
-            if(!isDrawing && !isSettingOrigin) canvas.defaultCursor = 'default'; 
+            if(!isDrawing && !isSettingOrigin) {
+                canvas.defaultCursor = 'default'; 
+            }
         });
         
         canvas.on('mouse:wheel', function(opt) { 
             var z = canvas.getZoom() * (0.999 ** opt.e.deltaY); 
-            if(z>50) z=50; 
-            if(z<0.01) z=0.01; 
+            if(z > 50) {
+                z = 50; 
+            }
+            if(z < 0.01) {
+                z = 0.01; 
+            }
             canvas.zoomToPoint({x: opt.e.offsetX, y: opt.e.offsetY}, z); 
             opt.e.preventDefault(); 
             opt.e.stopPropagation(); 
@@ -392,9 +669,24 @@
             if(active.length === 1) {
                 let obj = active[0]; 
                 document.getElementById('prop_id').value = obj.id;
-                document.getElementById('prop_frame').style.display = obj.id.includes('Frame') ? 'block' : 'none';
-                document.getElementById('prop_strut').style.display = obj.id.includes('Strut') ? 'block' : 'none';
-                document.getElementById('prop_support').style.display = obj.id.includes('Support') ? 'block' : 'none';
+                
+                if(obj.id.includes('Frame')) {
+                    document.getElementById('prop_frame').style.display = 'block';
+                } else {
+                    document.getElementById('prop_frame').style.display = 'none';
+                }
+                
+                if(obj.id.includes('Strut')) {
+                    document.getElementById('prop_strut').style.display = 'block';
+                } else {
+                    document.getElementById('prop_strut').style.display = 'none';
+                }
+                
+                if(obj.id.includes('Support')) {
+                    document.getElementById('prop_support').style.display = 'block';
+                } else {
+                    document.getElementById('prop_support').style.display = 'none';
+                }
                 
                 if(elementOverrides[obj.id] && obj.id.includes('Support')) { 
                     document.getElementById('sel_sup_type').value = elementOverrides[obj.id].type || 'Hinged'; 
@@ -407,16 +699,23 @@
         }
 
         function getNearestPointOnFrames(px, py) {
-            let bestDist = Infinity, bestPoint = {x: px, y: py};
+            let bestDist = Infinity;
+            let bestPoint = {x: px, y: py};
+            
             cadLines.forEach(line => {
                 let dx = line.x2 - line.x1;
                 let dy = line.y2 - line.y1; 
                 let len2 = dx * dx + dy * dy; 
-                if (len2 === 0) return;
+                if (len2 === 0) {
+                    return;
+                }
                 
-                let t = Math.max(0, Math.min(1, ((px - line.x1) * dx + (py - line.y1) * dy) / len2)); 
+                let dot = (px - line.x1) * dx + (py - line.y1) * dy;
+                let t = Math.max(0, Math.min(1, dot / len2)); 
+                
                 let projX = line.x1 + t * dx;
                 let projY = line.y1 + t * dy; 
+                
                 let dist = Math.hypot(px - projX, py - projY);
                 
                 if (dist < bestDist) { 
@@ -438,12 +737,20 @@
             
             supportsList.forEach((s, idx) => {
                 let relX = ((s.x - originPt.x)/ppx).toFixed(3);
-                tbody.innerHTML += `<tr><td>${idx+1}</td><td><input type="number" step="0.1" class="table-input" value="${relX}" onchange="moveSupportFromTable('${s.id}', this.value)"></td></tr>`;
+                let rowHtml = `<tr>
+                                 <td>${idx+1}</td>
+                                 <td>
+                                   <input type="number" step="0.1" class="table-input" value="${relX}" onchange="moveSupportFromTable('${s.id}', this.value)">
+                                 </td>
+                               </tr>`;
+                tbody.innerHTML += rowHtml;
             });
         }
         
         function moveSupportFromTable(id, newRelX) {
-            if(!originPt) return; 
+            if(!originPt) {
+                return; 
+            }
             let absX = originPt.x + (parseFloat(newRelX) * ppx); 
             let snap = getNearestPointOnFrames(absX, originPt.y); 
             
@@ -471,14 +778,25 @@
             if(!isRestore) {
                 supportsList.push({id: id, x: x, y: y, type: 'Hinged'});
             }
+            
             let sup = new fabric.Triangle({ 
-                left: x, top: y, width: 20, height: 20, fill: '#00FF00', 
-                originX: 'center', originY: 'center', angle: 180, id: id, 
-                hoverCursor: 'move', hasControls: false 
+                left: x, 
+                top: y, 
+                width: 20, 
+                height: 20, 
+                fill: '#00FF00', 
+                originX: 'center', 
+                originY: 'center', 
+                angle: 180, 
+                id: id, 
+                hoverCursor: 'move', 
+                hasControls: false 
             });
+            
             sup.on('moving', function(e) { 
                 let s = getNearestPointOnFrames(sup.left, sup.top); 
                 sup.set({left: s.x, top: s.y}); 
+                
                 let idx = supportsList.findIndex(i => i.id === id); 
                 if(idx > -1) { 
                     supportsList[idx].x = s.x; 
@@ -486,6 +804,7 @@
                 } 
                 updateSupportTable();
             });
+            
             canvas.add(sup);
         }
 
@@ -498,32 +817,62 @@
         
         function createStrutWithHandles(id, x1, y1, x2, y2, isRestore=false) {
             let line = new fabric.Line([x1, y1, x2, y2], { 
-                stroke: '#ff6e40', strokeWidth: 3, strokeDashArray: [5, 5], selectable: false 
+                stroke: '#ff6e40', 
+                strokeWidth: 3, 
+                strokeDashArray: [5, 5], 
+                selectable: false 
             }); 
             canvas.add(line);
             
             let pTop = new fabric.Circle({ 
-                left: x1, top: y1, radius: 10, fill: 'yellow', originX: 'center', originY: 'center', hasControls: false, id: id + '_top' 
+                left: x1, 
+                top: y1, 
+                radius: 10, 
+                fill: 'yellow', 
+                originX: 'center', 
+                originY: 'center', 
+                hasControls: false, 
+                id: id + '_top' 
             });
+            
             let pBot = new fabric.Circle({ 
-                left: x2, top: y2, radius: 10, fill: '#ff6e40', originX: 'center', originY: 'center', hasControls: false, id: id + '_bot' 
+                left: x2, 
+                top: y2, 
+                radius: 10, 
+                fill: '#ff6e40', 
+                originX: 'center', 
+                originY: 'center', 
+                hasControls: false, 
+                id: id + '_bot' 
             });
             
             canvas.add(pTop, pBot);
             
             if(!isRestore) {
-                strutsList.push({id: id, top_x: x1, top_y: y1, gx: x2, gy: y2, lineRef: line, pTop: pTop, pBot: pBot});
+                strutsList.push({
+                    id: id, 
+                    top_x: x1, 
+                    top_y: y1, 
+                    gx: x2, 
+                    gy: y2, 
+                    lineRef: line, 
+                    pTop: pTop, 
+                    pBot: pBot
+                });
             }
             
-            [pTop, pBot].forEach(p => {
+            let handles = [pTop, pBot];
+            handles.forEach(p => {
                 p.on('moving', function(e) {
                     let s = getNearestPointOnFrames(p.left, p.top); 
                     p.set({left: s.x, top: s.y});
+                    
                     if(p.id.includes('_top')) {
                         line.set({x1: s.x, y1: s.y}); 
                     } else {
                         line.set({x2: s.x, y2: s.y});
                     }
+                    
                     let idx = strutsList.findIndex(i => i.id === id); 
                     if(idx > -1) { 
                         strutsList[idx].top_x = line.x1; 
@@ -557,24 +906,54 @@
 
         function drawVisualLoad(targetIds, w1, w2, dir, lCase, lType) {
             let frames = cadLines.filter(l => targetIds.includes(l.curve_id) || targetIds.includes(l.id)); 
-            if(frames.length === 0) return null;
+            if(frames.length === 0) {
+                return null;
+            }
             
             let minX = Math.min(...frames.map(f => Math.min(f.x1, f.x2)));
             let maxX = Math.max(...frames.map(f => Math.max(f.x1, f.x2))); 
             let minY = Math.min(...frames.map(f => Math.min(f.y1, f.y2)));
             
-            let rectObj, textObj;
+            let rectObj;
+            let textObj;
+            
             if(lType === 'Point') {
                 let midX = (minX + maxX)/2; 
-                rectObj = new fabric.Line([midX, minY - 40, midX, minY], {stroke: 'magenta', strokeWidth: 5, selectable: false});
-                textObj = new fabric.Text(`${lCase}: ${w1} kN`, { left: midX, top: minY - 50, fill: 'magenta', fontSize: 14, originX: 'center', selectable: false });
+                rectObj = new fabric.Line([midX, minY - 40, midX, minY], {
+                    stroke: 'magenta', 
+                    strokeWidth: 5, 
+                    selectable: false
+                });
+                textObj = new fabric.Text(`${lCase}: ${w1} kN`, { 
+                    left: midX, 
+                    top: minY - 50, 
+                    fill: 'magenta', 
+                    fontSize: 14, 
+                    originX: 'center', 
+                    selectable: false 
+                });
             } else {
-                rectObj = new fabric.Rect({ left: minX, top: minY - 30, width: maxX - minX, height: 20, fill: 'rgba(0,0,255,0.4)', stroke: 'blue', selectable: false });
-                textObj = new fabric.Text(`${lCase}: ${w1} kN/m`, { left: (minX+maxX)/2, top: minY - 45, fill: 'yellow', fontSize: 14, originX: 'center', selectable: false });
+                rectObj = new fabric.Rect({ 
+                    left: minX, 
+                    top: minY - 30, 
+                    width: maxX - minX, 
+                    height: 20, 
+                    fill: 'rgba(0,0,255,0.4)', 
+                    stroke: 'blue', 
+                    selectable: false 
+                });
+                textObj = new fabric.Text(`${lCase}: ${w1} kN/m`, { 
+                    left: (minX+maxX)/2, 
+                    top: minY - 45, 
+                    fill: 'yellow', 
+                    fontSize: 14, 
+                    originX: 'center', 
+                    selectable: false 
+                });
             }
             
             canvas.add(rectObj, textObj); 
-            return {rectObj, textObj};
+            return {rectObj: rectObj, textObj: textObj};
         }
 
         function applyLoad() {
@@ -588,7 +967,12 @@
             saveState();
             
             let w1 = document.getElementById('load_w1').value;
-            let w2 = document.getElementById('load_type').value === 'Trapezoidal' ? document.getElementById('load_w2').value : w1;
+            let w2 = w1;
+            
+            if (document.getElementById('load_type').value === 'Trapezoidal') {
+                w2 = document.getElementById('load_w2').value;
+            }
+            
             let lCase = document.getElementById('load_case').value;
             let lAction = document.getElementById('load_action').value;
             let lType = document.getElementById('load_type').value;
@@ -601,7 +985,9 @@
                 appliedLoads = appliedLoads.filter(ld => { 
                     let overlap = ld.target.some(t => uniqueTargets.includes(t)); 
                     if(overlap && ld.case === lCase) { 
-                        if(ld.visual) canvas.remove(ld.visual.rectObj, ld.visual.textObj); 
+                        if(ld.visual) {
+                            canvas.remove(ld.visual.rectObj, ld.visual.textObj); 
+                        }
                         return false; 
                     } 
                     return true; 
@@ -609,9 +995,15 @@
             }
             
             let visual = drawVisualLoad(uniqueTargets, w1, w2, dir, lCase, lType);
+            
             appliedLoads.push({
-                target: uniqueTargets, case: lCase, type: lType, 
-                dir: dir, w1: w1, w2: w2, visual: visual
+                target: uniqueTargets, 
+                case: lCase, 
+                type: lType, 
+                dir: dir, 
+                w1: w1, 
+                w2: w2, 
+                visual: visual
             });
             
             canvas.discardActiveObject(); 
