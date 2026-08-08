@@ -6,108 +6,22 @@
     <!-- مكتبة الرسم الأساسية -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/fabric.js/5.3.1/fabric.min.js"></script>
     <style>
-        * { 
-            margin: 0; 
-            padding: 0; 
-            box-sizing: border-box; 
-            font-family: 'Segoe UI', Tahoma, sans-serif; 
-        }
-        body { 
-            display: flex; 
-            flex-direction: column; 
-            height: 100vh; 
-            overflow: hidden; 
-            background-color: #1e1e24; 
-            color: white; 
-            user-select: none; 
-        }
-        .header { 
-            background-color: #2b2b36; 
-            padding: 10px 20px; 
-            display: flex; 
-            justify-content: space-between; 
-            border-bottom: 2px solid #ff6e40; 
-        }
-        .workspace { 
-            display: flex; 
-            flex: 1; 
-            overflow: hidden; 
-        }
-        .sidebar { 
-            width: 340px; 
-            background-color: #25252d; 
-            padding: 15px; 
-            display: flex; 
-            flex-direction: column; 
-            gap: 10px; 
-            overflow-y: auto; 
-            border-right: 1px solid #3a3a46; 
-            border-left: 1px solid #3a3a46;
-        }
-        .tool-btn { 
-            background-color: #32323e; 
-            color: white; 
-            border: 1px solid #454555; 
-            padding: 8px; 
-            cursor: pointer; 
-            border-radius: 4px; 
-            font-weight: bold; 
-            transition: 0.2s;
-        }
-        .tool-btn:hover { 
-            background-color: #ff6e40; 
-        }
-        .canvas-container-wrap { 
-            flex: 1; 
-            position: relative; 
-            width: 100%; 
-            height: 100%; 
-            background-color: #000000;
-        }
-        .prop-group { 
-            margin-bottom: 10px; 
-        }
-        .prop-group label { 
-            display: block; 
-            font-size: 11px; 
-            color: #8a8a98; 
-            margin-bottom: 3px; 
-        }
-        .prop-group select, .prop-group input { 
-            width: 100%; 
-            background: #1e1e24; 
-            border: 1px solid #3a3a46; 
-            color: white; 
-            padding: 6px; 
-            border-radius: 4px; 
-        }
-        table { 
-            width: 100%; 
-            border-collapse: collapse; 
-            margin-top: 15px; 
-            font-size: 13px;
-        }
-        th, td { 
-            border: 1px solid #ccc; 
-            padding: 6px; 
-            text-align: center; 
-        }
-        th { 
-            background: #2b2b36; 
-            color: white; 
-        }
-        .flex-row { 
-            display: flex; 
-            gap: 5px; 
-        }
-        .table-input { 
-            width: 60px; 
-            padding: 2px; 
-            background: #333; 
-            color: #00FFFF; 
-            border: 1px solid #555; 
-            text-align: center;
-        }
+        * { margin: 0; padding: 0; box-sizing: border-box; font-family: 'Segoe UI', Tahoma, sans-serif; }
+        body { display: flex; flex-direction: column; height: 100vh; overflow: hidden; background-color: #1e1e24; color: white; user-select: none; }
+        .header { background-color: #2b2b36; padding: 10px 20px; display: flex; justify-content: space-between; border-bottom: 2px solid #ff6e40; }
+        .workspace { display: flex; flex: 1; overflow: hidden; }
+        .sidebar { width: 340px; background-color: #25252d; padding: 15px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; border-right: 1px solid #3a3a46; border-left: 1px solid #3a3a46;}
+        .tool-btn { background-color: #32323e; color: white; border: 1px solid #454555; padding: 8px; cursor: pointer; border-radius: 4px; font-weight: bold; transition: 0.2s;}
+        .tool-btn:hover { background-color: #ff6e40; }
+        .canvas-container-wrap { flex: 1; position: relative; width: 100%; height: 100%; background-color: #000000;}
+        .prop-group { margin-bottom: 10px; }
+        .prop-group label { display: block; font-size: 11px; color: #8a8a98; margin-bottom: 3px; }
+        .prop-group select, .prop-group input { width: 100%; background: #1e1e24; border: 1px solid #3a3a46; color: white; padding: 6px; border-radius: 4px; }
+        table { width: 100%; border-collapse: collapse; margin-top: 15px; font-size: 13px;}
+        th, td { border: 1px solid #ccc; padding: 6px; text-align: center; }
+        th { background: #2b2b36; color: white; }
+        .flex-row { display: flex; gap: 5px; }
+        .table-input { width: 60px; padding: 2px; background: #333; color: #00FFFF; border: 1px solid #555; text-align: center;}
     </style>
 </head>
 <body>
@@ -121,7 +35,6 @@
     </div>
 
     <div class="workspace">
-        <!-- Sidebar Left -->
         <div class="sidebar">
             <button class="tool-btn" style="background-color: #00bcd4;" onclick="drawManualFrame()">✏️ Draw Frame Line</button>
             
@@ -148,18 +61,9 @@
             <div style="border: 1px solid #e91e63; padding: 10px; border-radius: 4px; margin-top: 10px;">
                 <h4 style="font-size: 12px; color: #e91e63; margin-bottom: 5px;">⚙️ Load Combinations</h4>
                 <div class="flex-row">
-                    <div class="prop-group" style="flex: 1;">
-                        <label>Dead Factor</label>
-                        <input type="number" id="fac_d" value="1.2" step="0.1">
-                    </div>
-                    <div class="prop-group" style="flex: 1;">
-                        <label>Live Factor</label>
-                        <input type="number" id="fac_l" value="1.6" step="0.1">
-                    </div>
-                    <div class="prop-group" style="flex: 1;">
-                        <label>Wind Factor</label>
-                        <input type="number" id="fac_w" value="0.0" step="0.1">
-                    </div>
+                    <div class="prop-group" style="flex: 1;"><label>Dead Factor</label><input type="number" id="fac_d" value="1.2" step="0.1"></div>
+                    <div class="prop-group" style="flex: 1;"><label>Live Factor</label><input type="number" id="fac_l" value="1.6" step="0.1"></div>
+                    <div class="prop-group" style="flex: 1;"><label>Wind Factor</label><input type="number" id="fac_w" value="0.0" step="0.1"></div>
                 </div>
             </div>
         </div>
@@ -168,7 +72,6 @@
             <canvas id="designCanvas"></canvas>
         </div>
 
-        <!-- Sidebar Right -->
         <div class="sidebar">
             <div style="border: 1px solid #3399FF; padding: 10px; border-radius: 4px;">
                 <h4 style="font-size: 12px; color: #3399FF; margin-bottom: 5px;">➕ Placement</h4>
@@ -181,106 +84,42 @@
             <div style="border: 1px solid #ffeb3b; padding: 10px; border-radius: 4px; margin-top: 10px;">
                 <h4 style="font-size: 12px; color: #ffeb3b; margin-bottom: 5px;">🎯 Load Manager</h4>
                 <div class="flex-row">
-                    <div class="prop-group" style="flex: 1;">
-                        <label>Load Case</label>
-                        <select id="load_case">
-                            <option value="D">Dead Load</option>
-                            <option value="L">Live Load</option>
-                            <option value="W">Wind Load</option>
-                        </select>
-                    </div>
-                    <div class="prop-group" style="flex: 1;">
-                        <label>Action</label>
-                        <select id="load_action">
-                            <option value="Add">Add to Existing</option>
-                            <option value="Replace">Replace Existing</option>
-                        </select>
-                    </div>
+                    <div class="prop-group" style="flex: 1;"><label>Load Case</label><select id="load_case"><option value="D">Dead Load</option><option value="L">Live Load</option><option value="W">Wind Load</option></select></div>
+                    <div class="prop-group" style="flex: 1;"><label>Action</label><select id="load_action"><option value="Add">Add to Existing</option><option value="Replace">Replace Existing</option></select></div>
                 </div>
                 <div class="flex-row">
-                    <div class="prop-group" style="flex: 1;">
-                        <label>Shape</label>
-                        <select id="load_type" onchange="document.getElementById('div_w2').style.display = this.value === 'Trapezoidal' ? 'block' : 'none';">
-                            <option value="Uniform">Uniform</option>
-                            <option value="Trapezoidal">Trapezoidal</option>
-                            <option value="Point">Point Load</option>
-                        </select>
-                    </div>
-                    <div class="prop-group" style="flex: 1;">
-                        <label>Direction</label>
-                        <select id="load_dir">
-                            <option value="Vertical">Global Vertical</option>
-                            <option value="Local">Local</option>
-                        </select>
-                    </div>
+                    <div class="prop-group" style="flex: 1;"><label>Shape</label><select id="load_type" onchange="document.getElementById('div_w2').style.display = this.value === 'Trapezoidal' ? 'block' : 'none';"><option value="Uniform">Uniform</option><option value="Trapezoidal">Trapezoidal</option><option value="Point">Point Load</option></select></div>
+                    <div class="prop-group" style="flex: 1;"><label>Direction</label><select id="load_dir"><option value="Vertical">Global Vertical</option><option value="Local">Local</option></select></div>
                 </div>
                 <div class="flex-row">
-                    <div class="prop-group" style="flex: 1;">
-                        <label>W1/P (kN)</label>
-                        <input type="number" id="load_w1" value="15.0">
-                    </div>
-                    <div class="prop-group" style="flex: 1; display: none;" id="div_w2">
-                        <label>W2 (kN)</label>
-                        <input type="number" id="load_w2" value="5.0">
-                    </div>
+                    <div class="prop-group" style="flex: 1;"><label>W1/P (kN)</label><input type="number" id="load_w1" value="15.0"></div>
+                    <div class="prop-group" style="flex: 1; display: none;" id="div_w2"><label>W2 (kN)</label><input type="number" id="load_w2" value="5.0"></div>
                 </div>
                 <button class="tool-btn" onclick="applyLoad()" style="width:100%; background-color: #4CAF50;">Apply Load</button>
             </div>
             
             <h3 style="font-size: 13px; color: #ff6e40; border-bottom: 1px solid #333; padding-bottom: 5px; margin-top: 10px;">Properties</h3>
-            <div class="prop-group">
-                <label>Selected ID</label>
-                <input type="text" id="prop_id" readonly style="color: yellow; font-weight: bold;">
-            </div>
+            <div class="prop-group"><label>Selected ID</label><input type="text" id="prop_id" readonly style="color: yellow; font-weight: bold;"></div>
             
             <div id="prop_frame" style="display:none;">
-                <div class="prop-group">
-                    <label>Section</label>
-                    <select id="sel_frame_sec" onchange="updateOverrides()">
-                        <option value="Soldier U100">Soldier U100</option>
-                        <option value="Soldier U140">Soldier U140</option>
-                        <option value="Timber 10x10">Timber 10x10</option>
-                    </select>
-                </div>
+                <div class="prop-group"><label>Section</label><select id="sel_frame_sec" onchange="updateOverrides()"><option value="Soldier U100">Soldier U100</option><option value="Soldier U140">Soldier U140</option><option value="Timber 10x10">Timber 10x10</option></select></div>
             </div>
             <div id="prop_strut" style="display:none;">
-                <div class="prop-group">
-                    <label>Strut Type</label>
-                    <select id="sel_strut_sec" onchange="updateOverrides()">
-                        <option value="PPH 353 (1.5:3.5m)">PPH 353 (1.5:3.5m)</option>
-                        <option value="PPS 600 (3.0:6.0m)">PPS 600 (3.0:6.0m)</option>
-                    </select>
-                </div>
+                <div class="prop-group"><label>Strut Type</label><select id="sel_strut_sec" onchange="updateOverrides()"><option value="PPH 353 (1.5:3.5m)">PPH 353 (1.5:3.5m)</option><option value="PPS 600 (3.0:6.0m)">PPS 600 (3.0:6.0m)</option></select></div>
             </div>
             <div id="prop_support" style="display:none;">
                 <div class="flex-row">
-                    <div class="prop-group" style="flex: 1;">
-                        <label>Support Type</label>
-                        <select id="sel_sup_type" onchange="updateOverrides()">
-                            <option value="Hinged">Hinged</option>
-                            <option value="Roller">Roller</option>
-                            <option value="Fixed">Fixed</option>
-                        </select>
-                    </div>
-                    <div class="prop-group" style="flex: 1;">
-                        <label>Rotation (°)</label>
-                        <input type="number" id="sel_sup_ang" value="0" onchange="updateOverrides()">
-                    </div>
+                    <div class="prop-group" style="flex: 1;"><label>Support Type</label><select id="sel_sup_type" onchange="updateOverrides()"><option value="Hinged">Hinged</option><option value="Roller">Roller</option><option value="Fixed">Fixed</option></select></div>
+                    <div class="prop-group" style="flex: 1;"><label>Rotation (°)</label><input type="number" id="sel_sup_ang" value="0" onchange="updateOverrides()"></div>
                 </div>
-                <div class="prop-group">
-                    <label>Shoring System</label>
-                    <select id="sel_sup_sys" onchange="updateOverrides()">
-                        <option value="On Ground">None</option>
-                        <option value="Cup-lock">Cup-lock</option>
-                    </select>
-                </div>
+                <div class="prop-group"><label>Shoring System</label><select id="sel_sup_sys" onchange="updateOverrides()"><option value="On Ground">None</option><option value="Cup-lock">Cup-lock</option></select></div>
             </div>
         </div>
     </div>
 
     <script>
         // =========================================================
-        // 💡 STREAMLIT CUSTOM COMPONENT API (THE FIX)
+        // 💡 STREAMLIT BULLETPROOF HANDSHAKE (THE FIX)
         // =========================================================
         function sendMessageToStreamlitClient(type, data) {
             var outData = Object.assign({
@@ -290,22 +129,20 @@
             window.parent.postMessage(outData, "*");
         }
 
-        function setFrameHeight(height) {
-            sendMessageToStreamlitClient("setFrameHeight", {height: height});
+        function forceStreamlitHeight() {
+            // إجبار السيرفر على تجهيز الشاشة وإعطائها طول 850 بيكسل
+            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
+            sendMessageToStreamlitClient("setFrameHeight", {height: 850});
         }
 
-        // Initialize Streamlit connection properly
-        window.addEventListener("load", function() {
-            // 1. Tell Streamlit the component is ready
-            sendMessageToStreamlitClient("streamlit:componentReady", {apiVersion: 1});
-            
-            // 2. Set the initial height of the iframe so it doesn't get squashed
-            setFrameHeight(850); 
-        });
-
-        window.addEventListener("resize", function() {
-            setFrameHeight(850);
-        });
+        // 1. نضرب الأمر فوراً
+        forceStreamlitHeight();
+        
+        // 2. نضرب الأمر لما الصفحة تحمل
+        window.addEventListener("load", forceStreamlitHeight);
+        
+        // 3. (الضربة القاضية للسيرفر) نضرب الأمر كل ثانية عشان نمنع السيرفر يخفي الشاشة أبداً
+        setInterval(forceStreamlitHeight, 1000);
 
         function sendDataToPython() {
             let combo = {
@@ -320,15 +157,15 @@
                 struts: strutsList, 
                 loads: appliedLoads, 
                 overrides: elementOverrides, 
-                combo: combo 
+                combo: combo,
+                status: "ready"
             };
             
-            // 3. Send the geometry data back to Python when the user clicks the red button
             sendMessageToStreamlitClient("setComponentValue", {value: payload});
         }
 
         // =========================================================
-        // CORE CAD LOGIC (Untouched, Fully Uncompressed)
+        // CORE CAD LOGIC
         // =========================================================
         const wrapper = document.getElementById('canvas-wrapper');
         const canvas = new fabric.Canvas('designCanvas', { 
@@ -420,14 +257,8 @@
                 canvas.defaultCursor='default'; 
                 hideProps();
             }
-            if (e.ctrlKey && e.key === 'z') { 
-                e.preventDefault(); 
-                undoAction(); 
-            }
-            if (e.ctrlKey && e.key === 'y') { 
-                e.preventDefault(); 
-                redoAction(); 
-            }
+            if (e.ctrlKey && e.key === 'z') { e.preventDefault(); undoAction(); }
+            if (e.ctrlKey && e.key === 'y') { e.preventDefault(); redoAction(); }
             if (e.key === 'Delete') {
                 let active = canvas.getActiveObjects(); 
                 if(active.length === 0) return; 
