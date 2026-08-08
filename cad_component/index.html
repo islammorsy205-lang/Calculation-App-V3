@@ -116,7 +116,7 @@
         <div>
             <button class="tool-btn" style="background-color: #555;" onclick="undoAction()">↩ Undo (Ctrl+Z)</button>
             <button class="tool-btn" style="background-color: #555;" onclick="redoAction()">↪ Redo (Ctrl+Y)</button>
-            <button class="tool-btn" style="background-color: #f44336; padding: 5px 20px;" onclick="sendDataToPython()">🚀 Send to Python & Solve</button>
+            <button class="tool-btn" style="background-color: #f44336; padding: 5px 20px;" onclick="sendDataToPython()">🚀 Sync with Python</button>
         </div>
     </div>
 
@@ -287,11 +287,9 @@
 
     <script>
         // =========================================================
-        // 💡 THE BULLETPROOF STREAMLIT HANDSHAKE 
+        // 💡 STREAMLIT BULLETPROOF HANDSHAKE & DXF RECEIVER
         // =========================================================
-        
         function sendStreamlitMessage(type, data) {
-            // إضافة البادئة "streamlit:" التي يطلبها السيرفر حصرياً
             let messageType = type;
             if (!messageType.startsWith("streamlit:")) {
                 messageType = "streamlit:" + type;
@@ -305,19 +303,39 @@
             window.parent.postMessage(message, "*");
         }
 
-        function notifyReady() {
-            sendStreamlitMessage("componentReady", { apiVersion: 1 });
+        function notifyReady() { 
+            sendStreamlitMessage("componentReady", { apiVersion: 1 }); 
+        }
+        
+        function setFrameHeight(height) { 
+            sendStreamlitMessage("setFrameHeight", { height: height }); 
         }
 
-        function setFrameHeight(height) {
-            sendStreamlitMessage("setFrameHeight", { height: height });
-        }
+        notifyReady();
+        setFrameHeight(850);
+        
+        window.addEventListener("load", function() { 
+            notifyReady(); 
+            setFrameHeight(850); 
+        });
+        
+        window.addEventListener("resize", function() { 
+            setFrameHeight(850); 
+        });
+        
+        setInterval(function() { 
+            setFrameHeight(850); 
+        }, 1000);
 
         function sendDataToPython() {
+            let fac_d = parseFloat(document.getElementById('fac_d').value);
+            let fac_l = parseFloat(document.getElementById('fac_l').value);
+            let fac_w = parseFloat(document.getElementById('fac_w').value);
+            
             let combo = {
-                D: parseFloat(document.getElementById('fac_d').value), 
-                L: parseFloat(document.getElementById('fac_l').value), 
-                W: parseFloat(document.getElementById('fac_w').value)
+                D: fac_d, 
+                L: fac_l, 
+                W: fac_w
             };
             
             let payload = { 
@@ -333,25 +351,123 @@
             sendStreamlitMessage("setComponentValue", { value: payload });
         }
 
-        // 1. التنفيذ الفوري عند فتح الملف
-        notifyReady();
-        setFrameHeight(850);
+        // 💡 الاستماع لبيانات الـ DXF الجاية من بايثون
+        let lastDxfId = null;
         
-        // 2. التنفيذ عند تحميل الصفحة بالكامل
-        window.addEventListener("load", function() {
-            notifyReady();
-            setFrameHeight(850);
-        });
-        
-        // 3. التنفيذ عند تغيير حجم الشاشة
-        window.addEventListener("resize", function() {
-            setFrameHeight(850);
+        window.addEventListener("message", function(event) {
+            if (event.data.type === "streamlit:render") {
+                let args = event.data.args;
+                if (args.initial_dxf && args.initial_dxf.id !== lastDxfId) {
+                    lastDxfId = args.initial_dxf.id;
+                    loadDxfToCanvas(args.initial_dxf);
+                }
+            }
         });
 
-        // 4. التكرار كل ثانية لمنع السيرفر من ضغط الشاشة
-        setInterval(function() {
-            setFrameHeight(850);
-        }, 1000);
+        function loadDxfToCanvas(data) {
+            canvas.clear();
+            cadLines = []; 
+            strutsList = []; 
+            supportsList = []; 
+            appliedLoads = []; 
+            elementOverrides = {}; 
+            originPt = null;
+            
+            let minX = Infinity;
+            let minY = Infinity;
+            let maxX = -Infinity;
+            let maxY = -Infinity;
+            
+            function ub(x, y) { 
+                if(x < minX) minX = x; 
+                if(x > maxX) maxX = x; 
+                if(y < minY) minY = y; 
+                if(y > maxY) maxY = y; 
+            }
+            
+            data.frames.forEach(l => { 
+                ub(l.x1, l.y1); 
+                ub(l.x2, l.y2); 
+            });
+            
+            data.struts.forEach(s => { 
+                ub(s.p1[0], s.p1[1]); 
+                ub(s.p2[0], s.p2[1]); 
+            });
+            
+            data.supports.forEach(s => { 
+                ub(s.x, s.y); 
+            });
+            
+            if (minX === Infinity) {
+                return; 
+            }
+            
+            let pad = 100;
+            
+            let w_ratio = (canvas.width - pad * 2) / (maxX - minX || 1);
+            let h_ratio = (canvas.height - pad * 2) / (maxY - minY || 1);
+            
+            ppx = Math.min(w_ratio, h_ratio);
+            
+            function tx(x) {
+                return pad + (x - minX) * ppx;
+            }
+            
+            function ty(y) {
+                return canvas.height - pad - (y - minY) * ppx;
+            }
+
+            let fC = 1;
+            let sC = 1;
+            let spC = 1;
+            
+            data.frames.forEach(l => {
+                let id = 'Frame_' + fC++;
+                cadLines.push({
+                    id: id, 
+                    x1: tx(l.x1), 
+                    y1: ty(l.y1), 
+                    x2: tx(l.x2), 
+                    y2: ty(l.y2), 
+                    curve_id: 'None'
+                });
+                
+                let fLine = new fabric.Line([tx(l.x1), ty(l.y1), tx(l.x2), ty(l.y2)], { 
+                    stroke: '#00FFFF', 
+                    strokeWidth: 3, 
+                    id: id, 
+                    curve_id: 'None', 
+                    lockMovementX: true, 
+                    lockMovementY: true, 
+                    hasControls: false 
+                });
+                
+                canvas.add(fLine);
+            });
+            
+            data.struts.forEach(s => {
+                createStrutWithHandles(
+                    'Strut_' + sC++, 
+                    tx(s.p1[0]), 
+                    ty(s.p1[1]), 
+                    tx(s.p2[0]), 
+                    ty(s.p2[1])
+                );
+            });
+            
+            data.supports.forEach(s => {
+                createSupport(
+                    'Support_' + spC++, 
+                    tx(s.x), 
+                    ty(s.y)
+                );
+            });
+            
+            updateSupportTable();
+            saveState();
+            sendDataToPython(); 
+        }
 
         function toggleLoadInputs() {
             let loadType = document.getElementById('load_type').value;
@@ -364,7 +480,7 @@
         }
 
         // =========================================================
-        // CORE CAD LOGIC (Uncompressed)
+        // CORE CAD LOGIC (Uncompressed Setup)
         // =========================================================
         const wrapper = document.getElementById('canvas-wrapper');
         const canvas = new fabric.Canvas('designCanvas', { 
@@ -380,34 +496,28 @@
             canvas.renderAll(); 
         });
 
-        let cadLines = [];
-        let strutsList = [];
-        let supportsList = [];
-        let appliedLoads = [];
-        let elementOverrides = {};
+        let fC = 1;
+        let sC = 1;
+        let spC = 1;
         
-        let ppx = 100;
-        let originPt = null;
+        let ppx_glob = 100;
+        let originPt_glob = null;
         
         let isSettingOrigin = false;
         let isDrawing = false;
         let drawLineStart = null;
         let tempLine = null;
         
-        let fC = 1;
-        let sC = 1;
-        let spC = 1;
-        
         let undoStack = [];
         let redoStack = [];
 
         function saveState() { 
-            let stateObj = {
+            let stateObj = { 
                 cadLines: cadLines, 
                 strutsList: strutsList, 
                 supportsList: supportsList, 
                 appliedLoads: appliedLoads, 
-                elementOverrides: elementOverrides
+                elementOverrides: elementOverrides 
             };
             undoStack.push(JSON.stringify(stateObj)); 
             redoStack = []; 
@@ -437,16 +547,16 @@
                 canvas.add(fLine); 
             });
             
-            strutsList.forEach(s => {
-                createStrutWithHandles(s.id, s.top_x, s.top_y, s.gx, s.gy, true);
+            strutsList.forEach(s => { 
+                createStrutWithHandles(s.id, s.top_x, s.top_y, s.gx, s.gy, true); 
             });
             
-            supportsList.forEach(s => {
-                createSupport(s.id, s.x, s.y, true);
+            supportsList.forEach(s => { 
+                createSupport(s.id, s.x, s.y, true); 
             });
             
-            appliedLoads.forEach(ld => {
-                drawVisualLoad(ld.target, ld.w1, ld.w2, ld.dir, ld.case, ld.type);
+            appliedLoads.forEach(ld => { 
+                drawVisualLoad(ld.target, ld.w1, ld.w2, ld.dir, ld.case, ld.type); 
             });
             
             updateSupportTable();
@@ -454,12 +564,12 @@
         
         function undoAction() { 
             if(undoStack.length > 0) { 
-                let currentState = {
+                let currentState = { 
                     cadLines: cadLines, 
                     strutsList: strutsList, 
                     supportsList: supportsList, 
                     appliedLoads: appliedLoads, 
-                    elementOverrides: elementOverrides
+                    elementOverrides: elementOverrides 
                 };
                 redoStack.push(JSON.stringify(currentState)); 
                 let prevState = undoStack.pop();
@@ -469,12 +579,12 @@
         
         function redoAction() { 
             if(redoStack.length > 0) { 
-                let currentState = {
+                let currentState = { 
                     cadLines: cadLines, 
                     strutsList: strutsList, 
                     supportsList: supportsList, 
                     appliedLoads: appliedLoads, 
-                    elementOverrides: elementOverrides
+                    elementOverrides: elementOverrides 
                 };
                 undoStack.push(JSON.stringify(currentState)); 
                 let nextState = redoStack.pop();
@@ -579,6 +689,7 @@
                         y2: p.y, 
                         curve_id: 'None'
                     });
+                    
                     let fLine = new fabric.Line([drawLineStart.x, drawLineStart.y, p.x, p.y], { 
                         stroke: '#00FFFF', 
                         strokeWidth: 3, 
@@ -588,6 +699,7 @@
                         lockMovementY: true, 
                         hasControls: false 
                     });
+                    
                     canvas.add(fLine); 
                     canvas.remove(tempLine); 
                     tempLine = null; 
@@ -602,6 +714,7 @@
                 let snap = getNearestPointOnFrames(p.x, p.y); 
                 originPt = {x: snap.x, y: snap.y};
                 document.getElementById('origin_info').innerText = `Origin Set`;
+                
                 let originCircle = new fabric.Circle({
                     left: snap.x, 
                     top: snap.y, 
@@ -611,6 +724,7 @@
                     originY: 'center', 
                     selectable: false
                 });
+                
                 canvas.add(originCircle);
                 isSettingOrigin = false; 
                 canvas.defaultCursor = 'default'; 
@@ -627,10 +741,12 @@
 
         canvas.on('mouse:move', function(opt) { 
             let p = canvas.getPointer(opt.e);
+            
             if(isDrawing && tempLine) { 
                 tempLine.set({x2: p.x, y2: p.y}); 
                 canvas.renderAll(); 
             }
+            
             if (this.isDragging) { 
                 var v = this.viewportTransform; 
                 v[4] += opt.e.clientX - this.lastPosX; 
